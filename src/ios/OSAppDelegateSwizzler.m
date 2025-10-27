@@ -11,7 +11,7 @@
 
 // Forward declare Swift class interface
 // The actual Swift header import is added to the app's Bridging-Header.h by our hook
-// (hooks/after_plugin_install/setup_bridging_header.js)
+// (hooks/after_prepare_setup_bridging_header.js)
 //
 // This forward declaration allows compilation and provides type information.
 // At runtime, we verify the class exists before calling it.

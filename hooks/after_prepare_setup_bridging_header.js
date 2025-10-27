@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * After Plugin Install Hook - Setup Bridging Header
+ * After Prepare Hook - Setup Bridging Header
  *
- * This hook runs after the plugin is installed and adds the necessary
- * Swift header import to the app's existing Bridging-Header.h file.
+ * This hook runs after 'cordova prepare' and ensures the necessary
+ * Swift header import is added to the app's existing Bridging-Header.h file.
+ *
+ * Running on 'after_prepare' ensures our import persists even if other
+ * processes modify the bridging header during the build process.
  *
  * OutSystems apps already have a Bridging-Header.h configured at:
  * platforms/ios/{AppName}/Bridging-Header.h
