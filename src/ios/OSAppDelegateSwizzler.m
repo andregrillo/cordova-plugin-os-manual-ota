@@ -9,27 +9,12 @@
 #import "OSAppDelegateSwizzler.h"
 #import <objc/runtime.h>
 
-// Import Swift-generated header
-// The header name depends on the product module name (usually the app name)
-// Xcode generates headers like: "AppName-Swift.h"
+// Forward declare Swift class interface
+// The actual Swift header import is added to the app's Bridging-Header.h by our hook
+// (hooks/after_plugin_install/setup_bridging_header.js)
 //
-// We try common patterns, but the key is that the bridging header path
-// is configured in plugin.xml, so Xcode knows how to find Swift classes.
-#if __has_include("cordova_plugin_os_manual_ota-Swift.h")
-    #import "cordova_plugin_os_manual_ota-Swift.h"
-#elif __has_include("OTA_Test-Swift.h")
-    #import "OTA_Test-Swift.h"
-#else
-    // For user apps, Xcode generates ProductModuleName-Swift.h
-    // We can't know the exact name at compile time, but we use runtime checks below
-    // to verify the Swift class exists before calling it.
-    //
-    // The bridging header configured in plugin.xml ensures Swift symbols are available.
-    #import <Foundation/Foundation.h>
-#endif
-
-// Forward declare Swift class interface (in case header not found)
-// This allows compilation to succeed even if specific header name doesn't match
+// This forward declaration allows compilation and provides type information.
+// At runtime, we verify the class exists before calling it.
 @interface OSBackgroundUpdateManager : NSObject
 + (instancetype)shared;
 - (void)performBackgroundFetchWithCompletion:(void (^)(UIBackgroundFetchResult))completion;
