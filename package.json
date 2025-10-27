@@ -1,0 +1,30 @@
+{
+  "name": "cordova-plugin-os-manual-ota",
+  "version": "1.0.0",
+  "description": "Cordova plugin for manual control of OutSystems OTA updates with Background Fetch and Silent Push support",
+  "cordova": {
+    "id": "cordova-plugin-os-manual-ota",
+    "platforms": [
+      "ios"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/cordova-plugin-os-manual-ota.git"
+  },
+  "keywords": [
+    "cordova",
+    "outsystems",
+    "ota",
+    "ecosystem:cordova",
+    "cordova-ios",
+    "background-fetch",
+    "silent-push"
+  ],
+  "author": "Andre Grillo",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/yourusername/cordova-plugin-os-manual-ota/issues"
+  },
+  "homepage": "https://github.com/yourusername/cordova-plugin-os-manual-ota#readme"
+}

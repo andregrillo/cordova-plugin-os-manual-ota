@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
+        xmlns:android="http://schemas.android.com/apk/res/android"
+        id="cordova-plugin-os-manual-ota"
+        version="1.0.0">
+
+    <name>OutSystems Manual OTA</name>
+    <description>Cordova plugin for manual control of OutSystems OTA updates with Background Fetch and Silent Push support</description>
+    <license>MIT</license>
+    <keywords>cordova,outsystems,ota,background-fetch,push</keywords>
+    <repo>https://github.com/yourusername/cordova-plugin-os-manual-ota</repo>
+
+    <js-module src="www/OSManualOTA.js" name="OSManualOTA">
+        <clobbers target="OSManualOTA" />
+    </js-module>
+
+    <!-- Hooks -->
+    <hook type="after_prepare" src="hooks/after_prepare_patch_ota.js" />
+
+    <!-- iOS Platform -->
+    <platform name="ios">
+        <config-file target="config.xml" parent="/*">
+            <feature name="OSManualOTA">
+                <param name="ios-package" value="OSManualOTAPlugin"/>
+            </feature>
+        </config-file>
+
+        <!-- Add Background Modes capability -->
+        <config-file target="*-Info.plist" parent="UIBackgroundModes">
+            <array>
+                <string>fetch</string>
+                <string>remote-notification</string>
+            </array>
+        </config-file>
+
+        <!-- Minimum background fetch interval -->
+        <config-file target="*-Info.plist" parent="UIApplicationBackgroundFetchInterval">
+            <real>3600</real> <!-- 1 hour, can be customized -->
+        </config-file>
+
+        <!-- Plugin source files -->
+        <source-file src="src/ios/OSManualOTAPlugin.swift" />
+        <source-file src="src/ios/OSManualOTAManager.swift" />
+        <source-file src="src/ios/OSBackgroundUpdateManager.swift" />
+        <source-file src="src/ios/OSUpdateModels.swift" />
+
+        <!-- AppDelegate Swizzler (Objective-C) - Automatically hooks background operations -->
+        <header-file src="src/ios/OSAppDelegateSwizzler.h" />
+        <source-file src="src/ios/OSAppDelegateSwizzler.m" />
+
+        <!-- Bridging header for OutSystems Objective-C classes -->
+        <header-file src="src/ios/OSManualOTA-Bridging-Header.h" />
+
+        <!-- Dependencies on OutSystems core plugin -->
+        <dependency id="@outsystems/cordova-outsystems-core" />
+
+        <!-- Framework dependencies -->
+        <framework src="Foundation.framework" />
+        <framework src="UIKit.framework" />
+        <framework src="BackgroundTasks.framework" weak="true" />
+    </platform>
+
+</plugin>
