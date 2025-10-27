@@ -15,7 +15,9 @@
     </js-module>
 
     <!-- Hooks -->
+    <hook type="after_prepare" src="hooks/after_prepare_setup_bridging_header.js" />
     <hook type="after_prepare" src="hooks/after_prepare_patch_ota.js" />
+    <hook type="after_prepare" src="hooks/after_prepare_patch_splash.js" />
 
     <!-- iOS Platform -->
     <platform name="ios">

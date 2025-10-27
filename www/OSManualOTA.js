@@ -215,6 +215,36 @@ var OSManualOTA = {
     },
 
     /**
+     * Enable or disable splash screen bypass
+     * When enabled, the WebView splash screen is skipped, improving startup time
+     * @param {boolean} enabled - True to bypass splash screen, false to show it normally
+     * @param {Function} successCallback - Called when setting succeeds
+     * @param {Function} errorCallback - Called when setting fails
+     */
+    setSplashBypassEnabled: function(enabled, successCallback, errorCallback) {
+        // Set in native plugin
+        exec(
+            function() {
+                console.log('[OSManualOTA] Splash bypass ' + (enabled ? 'enabled' : 'disabled'));
+                successCallback && successCallback();
+            },
+            errorCallback,
+            'OSManualOTA',
+            'setSplashBypassEnabled',
+            [enabled]
+        );
+    },
+
+    /**
+     * Check if splash screen bypass is enabled
+     * @param {Function} successCallback - Called with {enabled: boolean}
+     * @param {Function} errorCallback - Called when check fails
+     */
+    isSplashBypassEnabled: function(successCallback, errorCallback) {
+        exec(successCallback, errorCallback, 'OSManualOTA', 'isSplashBypassEnabled', []);
+    },
+
+    /**
      * Event listener for OTA blocking status changes
      * @param {Function} callback - Called when blocking status changes with {enabled: boolean}
      */

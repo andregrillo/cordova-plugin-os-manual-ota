@@ -224,6 +224,49 @@ class OSManualOTAPlugin: CDVPlugin {
         commandDelegate.send(result, callbackId: command.callbackId)
     }
 
+    // MARK: - Splash Screen Bypass Control
+    @objc(setSplashBypassEnabled:)
+    func setSplashBypassEnabled(_ command: CDVInvokedUrlCommand) {
+        guard let enabled = command.argument(at: 0) as? Bool else {
+            let result = CDVPluginResult(
+                status: .error,
+                messageAs: "Invalid parameter: expected boolean"
+            )
+            commandDelegate.send(result, callbackId: command.callbackId)
+            return
+        }
+
+        // Set splash bypass state
+        otaManager.setSplashBypassEnabled(enabled)
+
+        // Also sync to localStorage for JavaScript hook
+        let jsCode = """
+        localStorage.setItem('os_manual_ota_splash_bypass_enabled', '\(enabled)');
+        console.log('[OSManualOTA] Splash bypass state synced to localStorage: \(enabled)');
+        """
+        commandDelegate.evalJs(jsCode)
+
+        let response: [String: Any] = [
+            "enabled": enabled,
+            "message": enabled ? "Splash bypass enabled" : "Splash bypass disabled"
+        ]
+
+        let result = CDVPluginResult(status: .ok, messageAs: response)
+        commandDelegate.send(result, callbackId: command.callbackId)
+    }
+
+    @objc(isSplashBypassEnabled:)
+    func isSplashBypassEnabled(_ command: CDVInvokedUrlCommand) {
+        let enabled = otaManager.isSplashBypassEnabled()
+
+        let response: [String: Any] = [
+            "enabled": enabled
+        ]
+
+        let result = CDVPluginResult(status: .ok, messageAs: response)
+        commandDelegate.send(result, callbackId: command.callbackId)
+    }
+
     // MARK: - Background Updates Control
     @objc(enableBackgroundUpdates:)
     func enableBackgroundUpdates(_ command: CDVInvokedUrlCommand) {
