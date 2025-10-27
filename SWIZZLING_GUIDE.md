@@ -319,12 +319,19 @@ Watch console for:
 
 ### **Issue: "Undefined symbols for Swift"**
 
-**Cause:** Swift bridging not configured
+**Cause:** Swift bridging not configured or header name mismatch
 
-**Solution:**
-- Ensure Swift support hook is configured
+**How we handle it:**
+1. We try common header names (`cordova_plugin_os_manual_ota-Swift.h`, `OTA_Test-Swift.h`)
+2. If none match, we forward-declare the Swift interface
+3. At runtime, we verify `OSBackgroundUpdateManager` class exists using `NSClassFromString()`
+4. If class not found, swizzling is skipped with a clear error message
+
+**Solution if it fails:**
+- Ensure Swift support hook is configured (see INTEGRATION_GUIDE.md Step 2)
 - Set `SWIFT_VERSION = 5.0` in build settings
-- Add bridging header path
+- Verify bridging header path in plugin.xml is correct
+- Check console logs for "Swift class OSBackgroundUpdateManager found" message
 
 ### **Issue: App crashes on background fetch**
 
