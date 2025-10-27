@@ -137,6 +137,7 @@ enum OSStorageKey {
     static let downloadedVersion = "os_manual_ota_downloaded_version"
     static let assetHashes = "os_manual_ota_asset_hashes"
     static let otaBlockingEnabled = "os_manual_ota_blocking_enabled"
+    static let splashBypassEnabled = "os_manual_ota_splash_bypass_enabled"
     static let lastUpdateCheck = "os_manual_ota_last_check"
     static let crashDetection = "os_manual_ota_crash_detection"
 }

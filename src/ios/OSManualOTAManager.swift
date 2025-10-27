@@ -299,6 +299,23 @@ import UIKit
         // For now, the plugin will handle this via JavaScript callback
     }
 
+    // MARK: - Splash Screen Bypass Control
+    @objc public func setSplashBypassEnabled(_ enabled: Bool) {
+        defaults.set(enabled, forKey: OSStorageKey.splashBypassEnabled)
+        print("💨 [OSManualOTA] Splash bypass \(enabled ? "enabled" : "disabled")")
+
+        // Post notification for UI updates if needed
+        NotificationCenter.default.post(
+            name: .splashBypassStatusChanged,
+            object: nil,
+            userInfo: ["enabled": enabled]
+        )
+    }
+
+    @objc public func isSplashBypassEnabled() -> Bool {
+        return defaults.bool(forKey: OSStorageKey.splashBypassEnabled)
+    }
+
     // MARK: - Network API Calls
     private func getLatestVersion() async throws -> String {
         guard let config = configuration else {
@@ -624,6 +641,7 @@ import UIKit
 // MARK: - Notification Names
 extension Notification.Name {
     static let otaBlockingStatusChanged = Notification.Name("OSManualOTA.blockingStatusChanged")
+    static let splashBypassStatusChanged = Notification.Name("OSManualOTA.splashBypassStatusChanged")
     static let otaUpdateAvailable = Notification.Name("OSManualOTA.updateAvailable")
     static let otaDownloadProgress = Notification.Name("OSManualOTA.downloadProgress")
     static let otaDownloadComplete = Notification.Name("OSManualOTA.downloadComplete")
