@@ -15,6 +15,8 @@
     </js-module>
 
     <!-- Hooks -->
+    <hook type="before_plugin_install" src="hooks/install_prerequisites.js" />
+    <hook type="after_plugin_add" src="hooks/add_swift_support.js" />
     <hook type="after_prepare" src="hooks/after_prepare_setup_bridging_header.js" />
     <hook type="after_prepare" src="hooks/after_prepare_patch_ota.js" />
     <hook type="after_prepare" src="hooks/after_prepare_patch_splash.js" />

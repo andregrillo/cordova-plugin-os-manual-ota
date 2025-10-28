@@ -77,23 +77,9 @@ module.exports = function(context) {
     // Read existing bridging header
     let bridgingHeaderContent = fs.readFileSync(bridgingHeaderPath, 'utf8');
 
-    // Check if our import is already there
-    const importStatement = '#import "OSManualOTA-Bridging-Header.h"';
-
-    if (bridgingHeaderContent.includes(importStatement)) {
-        console.log('✅ [OSManualOTA] Bridging header already configured');
-        return;
-    }
-
-    // Add our import at the end
-    const marker = '\n// OSManualOTA Plugin - Swift Interface\n';
-    const addition = marker + importStatement + '\n';
-
-    bridgingHeaderContent += addition;
-
-    // Write back
-    fs.writeFileSync(bridgingHeaderPath, bridgingHeaderContent, 'utf8');
-
-    console.log('✅ [OSManualOTA] Bridging header configured successfully');
-    console.log(`   Added: ${importStatement}`);
+    // The bridging header exists and is configured by Cordova/OutSystems
+    // We don't need to modify it - the Swift-to-Objective-C header is auto-generated
+    // by Xcode as "ProductModuleName-Swift.h"
+    console.log('✅ [OSManualOTA] Bridging header found (no modification needed)');
+    console.log('   Swift classes will be accessible via auto-generated header');
 };

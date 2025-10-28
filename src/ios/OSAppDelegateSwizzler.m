@@ -9,18 +9,21 @@
 #import "OSAppDelegateSwizzler.h"
 #import <objc/runtime.h>
 
-// Forward declare Swift class interface
-// The actual Swift header import is added to the app's Bridging-Header.h by our hook
-// (hooks/after_prepare_setup_bridging_header.js)
-//
-// This forward declaration allows compilation and provides type information.
-// At runtime, we verify the class exists before calling it.
-@interface OSBackgroundUpdateManager : NSObject
-+ (instancetype)shared;
-- (void)performBackgroundFetchWithCompletion:(void (^)(UIBackgroundFetchResult))completion;
-- (void)handleSilentPushNotificationWithUserInfo:(NSDictionary *)userInfo
-                                       completion:(void (^)(UIBackgroundFetchResult))completion;
-@end
+// Import the auto-generated Swift-to-Objective-C header
+// Xcode generates this as "ProductModuleName-Swift.h"
+// We use a forward declaration to avoid compilation errors if the name doesn't match
+#if __has_include("OTA_Test-Swift.h")
+    #import "OTA_Test-Swift.h"
+#else
+    // Forward declare if we can't find the generated header
+    // The class will be verified at runtime
+    @interface OSBackgroundUpdateManager : NSObject
+    + (instancetype)shared;
+    - (void)performBackgroundFetchWithCompletion:(void (^)(UIBackgroundFetchResult))completion;
+    - (void)handleSilentPushNotificationWithUserInfo:(NSDictionary *)userInfo
+                                           completion:(void (^)(UIBackgroundFetchResult))completion;
+    @end
+#endif
 
 @implementation OSAppDelegateSwizzler
 
