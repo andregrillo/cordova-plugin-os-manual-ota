@@ -10,10 +10,9 @@
 #import <objc/runtime.h>
 
 // Import the auto-generated Swift-to-Objective-C header
-// Xcode generates this as "ProductModuleName-Swift.h"
-// We use a forward declaration to avoid compilation errors if the name doesn't match
-#if __has_include("OTA_Test-Swift.h")
-    #import "OTA_Test-Swift.h"
+// OutSystems configures this as "OutSystems-Swift.h" in the Xcode project
+#if __has_include("OutSystems-Swift.h")
+    #import "OutSystems-Swift.h"
 #else
     // Forward declare if we can't find the generated header
     // The class will be verified at runtime

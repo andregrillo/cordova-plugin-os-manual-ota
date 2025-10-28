@@ -130,6 +130,15 @@ var OSManualOTA = {
     },
 
     /**
+     * Check if background updates are enabled
+     * @param {Function} successCallback - Called with {enabled: boolean}
+     * @param {Function} errorCallback - Called when check fails
+     */
+    isBackgroundFetchEnabled: function(successCallback, errorCallback) {
+        exec(successCallback, errorCallback, 'OSManualOTA', 'isBackgroundFetchEnabled', []);
+    },
+
+    /**
      * Set the minimum background fetch interval
      * @param {number} interval - Interval in seconds (minimum value handled by iOS)
      * @param {Function} successCallback - Called when setting succeeds

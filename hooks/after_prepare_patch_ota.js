@@ -62,8 +62,13 @@ function patchManifestLoader(context, platform) {
     // Mark as patched
     window.OSManualOTA_BlockingHook = true;
 
-    // Store reference to original OSManifestLoader
-    var OriginalOSManifestLoader = window.OSManifestLoader || {};
+    // OSManifestLoader is now defined above, store reference to it
+    var OriginalOSManifestLoader = OSManifestLoader;
+
+    if (!OriginalOSManifestLoader) {
+        console.error('[OSManualOTA] ERROR: OSManifestLoader not found!');
+        return;
+    }
 
     // Store original functions
     var originalGetLatestVersion = OriginalOSManifestLoader.getLatestVersion;
@@ -127,8 +132,8 @@ function patchManifestLoader(context, platform) {
         };
     }
 
-    // Update window.OSManifestLoader
-    window.OSManifestLoader = OriginalOSManifestLoader;
+    // Replace the global OSManifestLoader with our wrapped version
+    OSManifestLoader = OriginalOSManifestLoader;
 
     console.log('[OSManualOTA] ✅ Blocking hook active');
 })();
@@ -139,8 +144,8 @@ function patchManifestLoader(context, platform) {
 
 `;
 
-    // Prepend the patch to the original content
-    const patchedContent = patchCode + content;
+    // Append the patch AFTER the original content (so OSManifestLoader exists first)
+    const patchedContent = content + patchCode;
 
     // Write patched file
     fs.writeFileSync(loaderPath, patchedContent, 'utf8');
