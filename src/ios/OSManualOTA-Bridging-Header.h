@@ -9,9 +9,16 @@
 
 // OutSystems Core Plugin Headers
 #import "OSCache.h"
+#import "OSNativeCache.h"
 #import "OSCacheResources.h"
 #import "OSApplicationCache.h"
 #import "OSPreBundle.h"
 #import "OSCacheEntry.h"
 #import "OSManifestParser.h"
 #import "OSLogger.h"
+#import "OSThreadSafeDictionaryWrapper.h"
+
+// OSManualOTA Plugin Headers (Objective-C classes accessible to Swift)
+#import "OSBackgroundUpdateManager.h"
+#import "OSCacheHelper.h"
+#import "OSNativeCache+ManualOTA.h"

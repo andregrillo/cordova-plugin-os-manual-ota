@@ -12,7 +12,9 @@ class OSManualOTAPlugin: CDVPlugin {
 
     // MARK: - Properties
     private let otaManager = OSManualOTAManager.shared
-    private let backgroundManager = OSBackgroundUpdateManager.shared
+    private var backgroundManager: OSBackgroundUpdateManager {
+        return OSBackgroundUpdateManager.shared()
+    }
 
     // Store callback IDs for progress updates
     private var downloadCallbackId: String?
@@ -306,6 +308,20 @@ class OSManualOTAPlugin: CDVPlugin {
         let response: [String: Any] = [
             "interval": interval,
             "message": "Background fetch interval set to \(interval) seconds"
+        ]
+
+        let result = CDVPluginResult(status: .ok, messageAs: response)
+        commandDelegate.send(result, callbackId: command.callbackId)
+    }
+
+    // MARK: - Debug Methods
+
+    @objc(resetOTAState:)
+    func resetOTAState(_ command: CDVInvokedUrlCommand) {
+        otaManager.resetOTAState()
+
+        let response: [String: Any] = [
+            "message": "OTA state reset - all cached versions and hashes cleared"
         ]
 
         let result = CDVPluginResult(status: .ok, messageAs: response)

@@ -45,12 +45,23 @@
         <!-- Plugin source files -->
         <source-file src="src/ios/OSManualOTAPlugin.swift" />
         <source-file src="src/ios/OSManualOTAManager.swift" />
-        <source-file src="src/ios/OSBackgroundUpdateManager.swift" />
         <source-file src="src/ios/OSUpdateModels.swift" />
+
+        <!-- Background Update Manager (Objective-C) - Handles Background Fetch -->
+        <header-file src="src/ios/OSBackgroundUpdateManager.h" />
+        <source-file src="src/ios/OSBackgroundUpdateManager.m" />
+
+        <!-- Cache Helper (Objective-C) - Computes cache paths using OutSystems hash -->
+        <header-file src="src/ios/OSCacheHelper.h" />
+        <source-file src="src/ios/OSCacheHelper.m" />
 
         <!-- AppDelegate Swizzler (Objective-C) - Automatically hooks background operations -->
         <header-file src="src/ios/OSAppDelegateSwizzler.h" />
         <source-file src="src/ios/OSAppDelegateSwizzler.m" />
+
+        <!-- OSNativeCache Category - Exposes internal methods for cache swapping -->
+        <header-file src="src/ios/OSNativeCache+ManualOTA.h" />
+        <source-file src="src/ios/OSNativeCache+ManualOTA.m" />
 
         <!-- Bridging header for OutSystems Objective-C classes -->
         <header-file src="src/ios/OSManualOTA-Bridging-Header.h" />

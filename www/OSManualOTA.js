@@ -149,6 +149,15 @@ var OSManualOTA = {
     },
 
     /**
+     * Reset OTA state (clears cached versions and hashes) - for debugging/testing
+     * @param {Function} successCallback - Called when reset succeeds
+     * @param {Function} errorCallback - Called when reset fails
+     */
+    resetOTAState: function(successCallback, errorCallback) {
+        exec(successCallback, errorCallback, 'OSManualOTA', 'resetOTAState', []);
+    },
+
+    /**
      * Convenience method: Check and download update if available
      * @param {Function} progressCallback - Called with progress updates
      * @param {Function} successCallback - Called when process completes with {hasUpdate: boolean, downloaded: boolean}

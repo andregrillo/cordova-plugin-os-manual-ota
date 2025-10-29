@@ -140,6 +140,8 @@ enum OSStorageKey {
     static let splashBypassEnabled = "os_manual_ota_splash_bypass_enabled"
     static let lastUpdateCheck = "os_manual_ota_last_check"
     static let crashDetection = "os_manual_ota_crash_detection"
+    static let pendingSwapVersion = "os_manual_ota_pending_swap_version"
+    static let pendingSwapTimestamp = "os_manual_ota_pending_swap_timestamp"
 }
 
 // MARK: - Update Metrics

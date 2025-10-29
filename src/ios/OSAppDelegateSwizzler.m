@@ -7,22 +7,8 @@
 //
 
 #import "OSAppDelegateSwizzler.h"
+#import "OSBackgroundUpdateManager.h"
 #import <objc/runtime.h>
-
-// Import the auto-generated Swift-to-Objective-C header
-// OutSystems configures this as "OutSystems-Swift.h" in the Xcode project
-#if __has_include("OutSystems-Swift.h")
-    #import "OutSystems-Swift.h"
-#else
-    // Forward declare if we can't find the generated header
-    // The class will be verified at runtime
-    @interface OSBackgroundUpdateManager : NSObject
-    + (instancetype)shared;
-    - (void)performBackgroundFetchWithCompletion:(void (^)(UIBackgroundFetchResult))completion;
-    - (void)handleSilentPushNotificationWithUserInfo:(NSDictionary *)userInfo
-                                           completion:(void (^)(UIBackgroundFetchResult))completion;
-    @end
-#endif
 
 @implementation OSAppDelegateSwizzler
 
@@ -43,14 +29,14 @@
 #pragma mark - Swizzling
 
 + (void)swizzleAppDelegateMethods {
-    // Verify Swift class is available at runtime
-    Class swiftManagerClass = NSClassFromString(@"OSBackgroundUpdateManager");
-    if (!swiftManagerClass) {
-        NSLog(@"❌ [OSManualOTA] Swift class OSBackgroundUpdateManager not found!");
-        NSLog(@"   This might indicate a bridging header issue.");
+    // Verify the Objective-C class is available
+    if (![OSBackgroundUpdateManager class]) {
+        NSLog(@"❌ [OSManualOTA] OSBackgroundUpdateManager class not found!");
+        NSLog(@"   Background updates will not work, but OTA blocking still works via JavaScript patching.");
         return;
     }
-    NSLog(@"✅ [OSManualOTA] Swift class OSBackgroundUpdateManager found");
+
+    NSLog(@"✅ [OSManualOTA] OSBackgroundUpdateManager class found");
 
     // Get AppDelegate class
     Class appDelegateClass = [self getAppDelegateClass];

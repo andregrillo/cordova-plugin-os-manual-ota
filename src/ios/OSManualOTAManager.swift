@@ -31,6 +31,59 @@ import UIKit
         super.init()
         loadConfiguration()
         checkForCrashOnLastUpdate()
+
+        // Register for app foreground notifications to check for pending swaps
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+    }
+
+    /// Called when app enters foreground - checks for pending cache swaps
+    @objc private func appWillEnterForeground() {
+        checkAndApplyPendingSwap()
+    }
+
+    /// Checks if there's a pending cache swap from background download and applies it
+    private func checkAndApplyPendingSwap() {
+        guard let pendingVersion = defaults.string(forKey: OSStorageKey.pendingSwapVersion) else {
+            return // No pending swap
+        }
+
+        print("🔄 Detected pending cache swap for version: \(pendingVersion)")
+
+        // Get the manifest for this version
+        guard let config = configuration else {
+            print("❌ Cannot apply pending swap: configuration not loaded")
+            return
+        }
+
+        // Fetch manifest and swap
+        Task {
+            do {
+                // Fetch the latest manifest from server
+                let manifest = try await getModuleManifest()
+
+                // Verify it matches our pending version
+                if manifest.versionToken != pendingVersion {
+                    print("⚠️ Warning: Pending version (\(pendingVersion)) doesn't match latest manifest (\(manifest.versionToken))")
+                    print("   This could mean a newer version is available. Proceeding with pending swap anyway.")
+                }
+
+                try swapCacheToVersion(pendingVersion, manifest: manifest)
+
+                // Clear pending swap flags
+                defaults.removeObject(forKey: OSStorageKey.pendingSwapVersion)
+                defaults.removeObject(forKey: OSStorageKey.pendingSwapTimestamp)
+
+                print("✅ Pending cache swap completed successfully")
+            } catch {
+                print("❌ Failed to apply pending swap: \(error.localizedDescription)")
+                // Leave the pending flags in place to retry next time
+            }
+        }
     }
 
     // MARK: - Configuration
@@ -150,11 +203,17 @@ import UIKit
                 )
 
                 if success && !downloadCancelled {
-                    // 6. Save new version and hashes
+                    // 6. Save new version and hashes AFTER successful download
+                    //    Note: Patched files were skipped from download, so our modifications remain intact
+                    //    Cache swap will happen either:
+                    //    - When app enters foreground (if downloaded in background)
+                    //    - Immediately if already in foreground (handled by checkAndApplyPendingSwap)
                     saveDownloadedVersion(latestVersion)
                     saveAssetHashes(manifest.urlVersions)
 
-                    // 7. Log metrics
+                    print("✅ Download completed - update marked for cache swap")
+
+                    // 8. Log metrics
                     let duration = Date().timeIntervalSince(startTime)
                     logUpdateMetrics(
                         checkDuration: 0,
@@ -399,6 +458,45 @@ import UIKit
         }
     }
 
+    // MARK: - Cache Directory Management
+    private func ensureCacheDirectoryExists(forVersion version: String) throws {
+        guard let config = configuration else {
+            throw OTAError.invalidConfiguration
+        }
+
+        // Get the cache base directory path
+        let fileManager = FileManager.default
+        guard let appSupportDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw OTAError.downloadFailed("Could not access Application Support directory")
+        }
+
+        // Build the cache path structure like OutSystems does:
+        // .../Application Support/OSNativeCache/{hash(hostname/application)}/
+        // This matches the logic in OSNativeCache.m:1045-1050
+        let cacheBaseDir = appSupportDir.appendingPathComponent("OSNativeCache")
+
+        // Generate the same hash that OutSystems uses via Objective-C helper
+        // This ensures we get the same NSString hash value, not Swift's hashValue
+        let cacheKey = OSCacheHelper.cacheKey(forHostname: config.hostname, andApplication: config.applicationPath)
+        let cacheAppDir = cacheBaseDir.appendingPathComponent(cacheKey)
+
+        // Create directories if they don't exist
+        do {
+            if !fileManager.fileExists(atPath: cacheBaseDir.path) {
+                try fileManager.createDirectory(at: cacheBaseDir, withIntermediateDirectories: true, attributes: nil)
+                print("✅ Created cache base directory: \(cacheBaseDir.path)")
+            }
+
+            if !fileManager.fileExists(atPath: cacheAppDir.path) {
+                try fileManager.createDirectory(at: cacheAppDir, withIntermediateDirectories: true, attributes: nil)
+                print("✅ Created cache app directory: \(cacheAppDir.path)")
+            }
+        } catch {
+            print("❌ Failed to create cache directories: \(error.localizedDescription)")
+            throw OTAError.downloadFailed("Failed to create cache directories: \(error.localizedDescription)")
+        }
+    }
+
     private func downloadChangedFiles(
         changedFiles: [String: String],
         manifest: OSModuleManifest,
@@ -408,18 +506,52 @@ import UIKit
             throw OTAError.invalidConfiguration
         }
 
+        // Ensure cache directory exists before downloading
+        try ensureCacheDirectoryExists(forVersion: version)
+
         // Report initial progress
         let totalFiles = manifest.urlVersions.count
         let changedCount = changedFiles.count
         let skippedFiles = totalFiles - changedCount
         progressHandler?(0, changedCount, skippedFiles)
 
+        // Files we patch and should skip from download (keep our patched versions)
+        let patchedFiles = [
+            "/scripts/OutSystemsManifestLoader.js",
+            "/scripts/OutSystemsUI.Private.ApplicationLoadEvents.mvc.js"
+        ]
+
         // Prepare resource list in OutSystems format
         // Format: ["path?hash", "path2?hash2", ...]
+        // Skip patched files - we'll keep using our modified versions
         var resourceList = NSMutableArray()
+        var skippedPatchedFiles = 0
         for (path, hash) in manifest.urlVersions {
-            let resourcePath = "\(path)?\(hash)"
-            resourceList.add(resourcePath)
+            // Skip files that we've patched
+            var shouldSkip = false
+            for patchedFile in patchedFiles {
+                if path.contains(patchedFile) {
+                    shouldSkip = true
+                    skippedPatchedFiles += 1
+                    print("⏭️  Skipping patched file from download: \(path)")
+                    break
+                }
+            }
+
+            if !shouldSkip {
+                // Check if hash already starts with '?' to avoid double question marks
+                let resourcePath: String
+                if hash.hasPrefix("?") {
+                    resourcePath = "\(path)\(hash)"
+                } else {
+                    resourcePath = "\(path)?\(hash)"
+                }
+                resourceList.add(resourcePath)
+            }
+        }
+
+        if skippedPatchedFiles > 0 {
+            print("✅ Skipped \(skippedPatchedFiles) patched file(s) from download - keeping our modifications")
         }
 
         // Prepare URL mappings (if any)
@@ -443,6 +575,7 @@ import UIKit
             // Track progress
             var downloadedFiles = 0
             var errorOccurred = false
+            var cacheResourcesRef: OSCacheResources?
 
             // Progress handler
             let downloadProgressBlock: DownloadProgressBlock = { [weak self] initial, loaded, total in
@@ -467,13 +600,37 @@ import UIKit
             }
 
             // Finish handler
-            let downloadFinishBlock: DownloadFinishBlock = { success in
+            let downloadFinishBlock: DownloadFinishBlock = { [weak self] success in
+                guard let self = self else {
+                    continuation.resume(returning: false)
+                    return
+                }
+
                 if self.downloadCancelled {
                     continuation.resume(returning: false)
                 } else if errorOccurred || !success {
                     continuation.resume(throwing: OTAError.downloadFailed("Download failed"))
                 } else {
-                    continuation.resume(returning: true)
+                    // Register the downloaded cache frame with OutSystems cache system
+                    guard let cacheResources = cacheResourcesRef else {
+                        continuation.resume(throwing: OTAError.downloadFailed("Cache resources not available"))
+                        return
+                    }
+
+                    do {
+                        try self.registerCacheFrame(cacheResources, version: version)
+
+                        // Mark that an update is ready to be applied
+                        // Don't swap cache here if we're in background - file writes will fail!
+                        self.defaults.set(version, forKey: OSStorageKey.pendingSwapVersion)
+                        self.defaults.set(Date().timeIntervalSince1970, forKey: OSStorageKey.pendingSwapTimestamp)
+                        print("✅ Update downloaded and registered - marked for swap on foreground")
+
+                        continuation.resume(returning: true)
+                    } catch {
+                        print("❌ Failed to register cache frame: \(error.localizedDescription)")
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
 
@@ -493,6 +650,9 @@ import UIKit
                 onErrorHandler: downloadErrorBlock,
                 onFinishHandler: downloadFinishBlock
             )
+
+            // Store reference for finish handler
+            cacheResourcesRef = cacheResources
 
             // Get or create application cache
             // Note: In a real integration, you'd get this from OSNativeCache
@@ -557,9 +717,355 @@ import UIKit
         }
     }
 
+    // MARK: - Cache Frame Management
+
+    /// Registers a downloaded cache frame with the OutSystems cache system
+    /// This makes the frame discoverable for cache swapping
+    private func registerCacheFrame(_ cacheResources: OSCacheResources, version: String) throws {
+        guard let config = configuration else {
+            throw OTAError.invalidConfiguration
+        }
+
+        print("📝 Registering cache frame for version: \(version)")
+
+        // Get the shared OSNativeCache instance
+        guard let cacheInstance = OSNativeCache.sharedInstance() as? OSNativeCache else {
+            throw OTAError.downloadFailed("OSNativeCache not available")
+        }
+
+        // Set current application context
+        cacheInstance.setCurrentApplication(config.hostname, application: config.applicationPath)
+
+        // Get the application cache
+        let appKey = OSCacheHelper.cacheKey(forHostname: config.hostname, andApplication: config.applicationPath)
+        guard let applicationEntries = cacheInstance.applicationEntries(),
+              let appCache = applicationEntries.object(forKey: appKey) as? OSApplicationCache else {
+            throw OTAError.downloadFailed("Application cache not found for key: \(appKey)")
+        }
+
+        // Add the cache frame to the application cache
+        appCache.addFrame(cacheResources)
+        print("✅ Cache frame registered successfully")
+    }
+
+    // MARK: - Cache Swapping
+
+    /// Swaps the OutSystems cache to make the downloaded version active
+    /// This is the critical step that makes OutSystems load the new version on next app start
+    private func swapCacheToVersion(_ version: String, manifest: OSModuleManifest) throws {
+        guard let config = configuration else {
+            throw OTAError.invalidConfiguration
+        }
+
+        print("🔄 Swapping cache to version: \(version)")
+
+        // Get the shared OSNativeCache instance - cast to proper type
+        guard let cacheInstance = OSNativeCache.sharedInstance() as? OSNativeCache else {
+            throw OTAError.downloadFailed("OSNativeCache not available")
+        }
+
+        // Set current application context
+        cacheInstance.setCurrentApplication(config.hostname, application: config.applicationPath)
+
+        // Get the application cache
+        let appKey = OSCacheHelper.cacheKey(forHostname: config.hostname, andApplication: config.applicationPath)
+        guard let applicationEntries = cacheInstance.applicationEntries(),
+              let appCache = applicationEntries.object(forKey: appKey) as? OSApplicationCache else {
+            throw OTAError.downloadFailed("Application cache not found for key: \(appKey)")
+        }
+
+        // Find the cache frame for our downloaded version
+        guard let downloadedFrame = appCache.getFrameForVersion(version) else {
+            throw OTAError.downloadFailed("Downloaded cache frame not found for version: \(version)")
+        }
+
+        print("📦 Found cache frame for version \(version)")
+        print("   Status: \(downloadedFrame.status.rawValue)")
+        if let entries = downloadedFrame.cacheEntries {
+            print("   Cache entries count: \(entries.count)")
+        }
+
+        // Set the downloaded frame as ongoing cache resources
+        cacheInstance.setOngoingCacheResources(downloadedFrame)
+
+        // Change cache status to UPDATE_READY (required for swapCache to work)
+        // OSCacheStatusUpdateReady = 4
+        cacheInstance.change(OSCacheStatus(rawValue: 4)!)
+        print("✅ Cache status set to UPDATE_READY")
+
+        // Perform the cache swap
+        let swapSuccess = cacheInstance.swapCache()
+
+        if !swapSuccess {
+            throw OTAError.downloadFailed("swapCache() returned false - check cache status and resource validation")
+        }
+
+        print("✅ Cache swap completed successfully")
+
+        // CRITICAL: Write the manifest to disk to persist the swap
+        cacheInstance.writeManifest()
+        print("✅ Cache manifest written to disk")
+
+        // Verify the running version was actually updated
+        if let newRunningFrame = appCache.getCurrentRunningFrame() {
+            let runningVersion = newRunningFrame.versionToken
+            print("   Running version after swap: \(runningVersion ?? "nil")")
+
+            if runningVersion != version {
+                print("⚠️  WARNING: Running version (\(runningVersion ?? "nil")) doesn't match downloaded version (\(version))")
+            } else {
+                print("   ✅ New version \(version) will load on next app start")
+            }
+        } else {
+            print("⚠️  WARNING: Could not verify running version after swap")
+        }
+
+        // Also update our UserDefaults tracking
+        saveCurrentVersion(version)
+    }
+
+    // MARK: - Plugin Patch Management
+    private func deletePatchedFilesFromCache(version: String, manifest: OSModuleManifest) throws {
+        guard let config = configuration else {
+            throw OTAError.invalidConfiguration
+        }
+
+        let fileManager = FileManager.default
+        guard let appSupportDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            print("⚠️ Could not access app support directory")
+            return
+        }
+
+        let cacheKey = OSCacheHelper.cacheKey(forHostname: config.hostname, andApplication: config.applicationPath)
+        let cacheDir = appSupportDir
+            .appendingPathComponent("OSNativeCache")
+            .appendingPathComponent(cacheKey)
+
+        print("🔍 Looking for patched files in cache: \(cacheDir.path)")
+
+        // Also check www directory (prebundle/initial files)
+        guard let wwwDir = Bundle.main.resourceURL?.appendingPathComponent("www/scripts") else {
+            print("⚠️ Could not access www directory")
+            return
+        }
+        print("🔍 Also checking www directory: \(wwwDir.path)")
+
+        guard fileManager.fileExists(atPath: cacheDir.path) else {
+            print("ℹ️ Cache directory doesn't exist yet - nothing to delete")
+            return
+        }
+
+        // File paths that we patch (from the manifest)
+        let patchedFilePaths = [
+            "/scripts/OutSystemsManifestLoader.js",
+            "/scripts/OutSystemsUI.Private.ApplicationLoadEvents.mvc.js"
+        ]
+
+        // Find the NEW hashes (server's expected hashes) for these files in the manifest
+        var newHashesToDelete: [String] = []
+        for (path, hash) in manifest.urlVersions {
+            for patchedPath in patchedFilePaths {
+                if path.contains(patchedPath) {
+                    // Extract just the hash part (remove the '?' prefix if present)
+                    let cleanHash = hash.hasPrefix("?") ? String(hash.dropFirst()) : hash
+                    newHashesToDelete.append(cleanHash)
+                    print("🎯 Will delete NEW hash for: \(path) (hash: \(cleanHash))")
+                }
+            }
+        }
+
+        // Also get OLD hashes from saved asset hashes (previous version's hashes)
+        var oldHashesToDelete: [String] = []
+        if let savedHashesData = defaults.data(forKey: OSStorageKey.assetHashes),
+           let oldHashes = try? JSONDecoder().decode([String: String].self, from: savedHashesData) {
+            for (path, hash) in oldHashes {
+                for patchedPath in patchedFilePaths {
+                    if path.contains(patchedPath) {
+                        let cleanHash = hash.hasPrefix("?") ? String(hash.dropFirst()) : hash
+                        oldHashesToDelete.append(cleanHash)
+                        print("🎯 Will delete OLD hash for: \(path) (hash: \(cleanHash))")
+                    }
+                }
+            }
+        }
+
+        let allHashesToDelete = newHashesToDelete + oldHashesToDelete
+
+        guard !allHashesToDelete.isEmpty else {
+            print("⚠️ No patched files found in manifest")
+            return
+        }
+
+        do {
+            let files = try fileManager.contentsOfDirectory(atPath: cacheDir.path)
+            print("📁 Found \(files.count) files in cache directory")
+            var deletedCount = 0
+
+            // Also look for files by checking their content (since cache names might not match manifest hashes)
+            // This happens when files were previously cached with old hashes
+            var jsFilesChecked = 0
+            for fileName in files {
+                let filePath = cacheDir.appendingPathComponent(fileName)
+
+                // First, try exact hash match (check both old and new hashes)
+                var shouldDelete = false
+                var deleteReason = ""
+                for hash in allHashesToDelete {
+                    if fileName == hash || fileName.contains(hash) {
+                        shouldDelete = true
+                        deleteReason = "hash match"
+                        print("🎯 Matched by hash: \(fileName)")
+                        break
+                    }
+                }
+
+                // If no hash match, check file content for identifying strings
+                if !shouldDelete, let content = try? String(contentsOf: filePath, encoding: .utf8) {
+                    jsFilesChecked += 1
+
+                    // Check if this is OutSystemsManifestLoader.js
+                    if content.contains("OutSystemsManifestLoader") && content.contains("checkForUpdates") {
+                        shouldDelete = true
+                        deleteReason = "ManifestLoader content"
+                        print("🎯 Matched by content: OutSystemsManifestLoader.js in file \(fileName)")
+
+                        // Show first 200 chars to verify it's the right file
+                        let preview = String(content.prefix(200))
+                        print("   Preview: \(preview)...")
+                    }
+                    // Check if this is ApplicationLoadEvents
+                    else if content.contains("ApplicationLoadEvents") && content.contains("MinimumDisplayTimeMs") {
+                        shouldDelete = true
+                        deleteReason = "ApplicationLoadEvents content"
+                        print("🎯 Matched by content: ApplicationLoadEvents in file \(fileName)")
+                    }
+                }
+
+                if shouldDelete {
+                    do {
+                        try fileManager.removeItem(at: filePath)
+                        print("🗑️  Deleted cached file: \(fileName) (reason: \(deleteReason))")
+                        deletedCount += 1
+                    } catch {
+                        print("⚠️ Failed to delete \(fileName): \(error.localizedDescription)")
+                    }
+                }
+            }
+
+            print("✅ Deleted \(deletedCount) cached file(s), checked \(jsFilesChecked) JS files (target: old+new hashes)")
+
+            // ALSO delete from www directory (prebundle) if files exist there
+            // This is where OutSystems loads files from if they're not in cache yet
+            if fileManager.fileExists(atPath: wwwDir.path) {
+                let wwwManifestLoader = wwwDir.appendingPathComponent("OutSystemsManifestLoader.js")
+                let wwwAppLoadEvents = wwwDir.appendingPathComponent("OutSystemsUI.Private.ApplicationLoadEvents.mvc.js")
+
+                if fileManager.fileExists(atPath: wwwManifestLoader.path) {
+                    do {
+                        try fileManager.removeItem(at: wwwManifestLoader)
+                        print("🗑️  Deleted www/OutSystemsManifestLoader.js")
+                        deletedCount += 1
+                    } catch {
+                        print("⚠️ Failed to delete www/OutSystemsManifestLoader.js: \(error.localizedDescription)")
+                    }
+                }
+
+                if fileManager.fileExists(atPath: wwwAppLoadEvents.path) {
+                    do {
+                        try fileManager.removeItem(at: wwwAppLoadEvents)
+                        print("🗑️  Deleted www/OutSystemsUI.Private.ApplicationLoadEvents.mvc.js")
+                        deletedCount += 1
+                    } catch {
+                        print("⚠️ Failed to delete www/ApplicationLoadEvents: \(error.localizedDescription)")
+                    }
+                }
+
+                print("✅ Total deleted: \(deletedCount) file(s) from cache + www")
+            }
+        } catch {
+            print("⚠️ Could not clean patched files from cache: \(error.localizedDescription)")
+        }
+    }
+
+    private func reapplyPluginPatches(version: String) async throws {
+        guard let config = configuration else {
+            throw OTAError.invalidConfiguration
+        }
+
+        print("🔧 Re-applying plugin patches after OTA download...")
+
+        // Get the cache directory where files were downloaded
+        let fileManager = FileManager.default
+        guard let appSupportDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw OTAError.downloadFailed("Could not access Application Support directory")
+        }
+
+        let cacheKey = OSCacheHelper.cacheKey(forHostname: config.hostname, andApplication: config.applicationPath)
+        let cacheDir = appSupportDir
+            .appendingPathComponent("OSNativeCache")
+            .appendingPathComponent(cacheKey)
+
+        // Files to patch with their modifications
+        let patchesToApply: [(file: String, searchFor: String, replaceWith: String)] = [
+            (
+                file: "OutSystemsManifestLoader.js",
+                searchFor: "function checkForUpdates(",
+                replaceWith: """
+                // [OSManualOTA Plugin Patch] Check if OTA is blocked
+                if (window.localStorage && window.localStorage.getItem('os_manual_ota_blocking_enabled') === 'true') {
+                    console.log('[OSManualOTA] 🚫 Blocking automatic manifest fetch');
+                    return;
+                }
+
+                function checkForUpdates(
+                """
+            ),
+            (
+                file: "OutSystemsUI.Private.ApplicationLoadEvents.mvc.js",
+                searchFor: "MinimumDisplayTimeMs: 1500",
+                replaceWith: """
+                MinimumDisplayTimeMs: (window.localStorage && window.localStorage.getItem('os_manual_ota_splash_bypass_enabled') === 'true') ? 50 : 1500
+                """
+            )
+        ]
+
+        var patchedCount = 0
+        for patch in patchesToApply {
+            // Find the file in cache (it's stored as a hash)
+            let files = try fileManager.contentsOfDirectory(atPath: cacheDir.path)
+
+            for fileName in files {
+                let filePath = cacheDir.appendingPathComponent(fileName)
+
+                guard let content = try? String(contentsOf: filePath, encoding: .utf8) else {
+                    continue
+                }
+
+                // Check if this is the file we're looking for
+                if content.contains(patch.file) || fileName.contains(patch.file) {
+                    // Apply the patch
+                    if content.contains(patch.searchFor) && !content.contains(patch.replaceWith) {
+                        let patchedContent = content.replacingOccurrences(of: patch.searchFor, with: patch.replaceWith)
+                        try patchedContent.write(to: filePath, atomically: true, encoding: .utf8)
+                        print("✅ Re-patched: \(patch.file)")
+                        patchedCount += 1
+                    }
+                }
+            }
+        }
+
+        if patchedCount > 0 {
+            print("✅ Successfully re-applied \(patchedCount) plugin patch(es)")
+        } else {
+            print("⚠️ No patches applied - files may already be patched or not found")
+        }
+    }
+
     // MARK: - Crash Detection
     private func setCrashDetectionFlag() {
-        defaults.set(true, forKey: OSStorageKey.crashDetection)
+        // TODO: Re-enable after testing
+        print("🐛 [DEBUG] Crash detection flag DISABLED for testing")
+        // defaults.set(true, forKey: OSStorageKey.crashDetection)
     }
 
     private func clearCrashDetectionFlag() {
@@ -567,6 +1073,11 @@ import UIKit
     }
 
     private func checkForCrashOnLastUpdate() {
+        // TODO: Re-enable after testing
+        print("🐛 [DEBUG] Crash detection check DISABLED for testing")
+
+        // Temporarily disabled for testing
+        /*
         if defaults.bool(forKey: OSStorageKey.crashDetection) {
             // App crashed after last update, rollback automatically
             print("⚠️ Detected crash after last update, initiating automatic rollback...")
@@ -578,6 +1089,7 @@ import UIKit
                 }
             }
         }
+        */
     }
 
     // MARK: - Network Conditions
@@ -635,6 +1147,22 @@ import UIKit
         // Get reference to OutSystems cache if available
         // This would require accessing the OutSystems plugin
         return nil
+    }
+
+    // MARK: - Debug/Reset Methods
+
+    /// Resets all stored OTA state (for debugging/testing)
+    /// This clears downloaded version, asset hashes, and current version
+    func resetOTAState() {
+        print("🔄 Resetting OTA state...")
+        defaults.removeObject(forKey: OSStorageKey.currentVersion)
+        defaults.removeObject(forKey: OSStorageKey.downloadedVersion)
+        defaults.removeObject(forKey: OSStorageKey.assetHashes)
+        defaults.removeObject(forKey: OSStorageKey.previousVersion)
+        defaults.removeObject(forKey: OSStorageKey.lastUpdateCheck)
+        defaults.removeObject(forKey: OSStorageKey.pendingSwapVersion)
+        defaults.removeObject(forKey: OSStorageKey.pendingSwapTimestamp)
+        print("✅ OTA state reset complete")
     }
 }
 

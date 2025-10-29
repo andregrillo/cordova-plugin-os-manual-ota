@@ -200,15 +200,10 @@ import BackgroundTasks
                 print("⏱️ Background download completed in \(String(format: "%.2f", duration))s, success: \(success)")
 
                 if success {
-                    // Automatically apply the update (will take effect on next launch)
-                    self?.otaManager.applyUpdate { applied, error in
-                        if applied {
-                            print("✅ Update applied successfully - will take effect on next app launch")
-                        } else {
-                            print("⚠️ Failed to apply update: \(error?.localizedDescription ?? "unknown")")
-                        }
-                        completion(applied)
-                    }
+                    // Update downloaded successfully and marked as pending swap
+                    // The cache swap will happen automatically when app enters foreground
+                    print("✅ Update downloaded in background - pending swap on foreground")
+                    completion(true)
                 } else {
                     completion(false)
                 }
