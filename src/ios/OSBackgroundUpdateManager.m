@@ -55,7 +55,9 @@
         _otaManager = [OSManualOTAManager shared];
         _backgroundTask = UIBackgroundTaskInvalid;
         _backgroundTaskIdentifier = @"com.outsystems.manual-ota.refresh";
-        [self registerBackgroundTasks];
+        // NOTE: BGTaskScheduler registration disabled - causes crash when registered after app launch
+        // Legacy Background Fetch API (iOS 7+) is sufficient for our needs
+        // [self registerBackgroundTasks];
     }
     return self;
 }
@@ -109,7 +111,10 @@
 }
 
 #pragma mark - BGAppRefreshTask (iOS 13+)
+// NOTE: BGTaskScheduler methods disabled - causes crash when registered after app launch
+// Legacy Background Fetch API (iOS 7+) is sufficient for our needs
 
+/*
 - (void)registerBackgroundTasks {
     if (@available(iOS 13.0, *)) {
         __weak OSBackgroundUpdateManager *weakSelf = self;
@@ -162,6 +167,7 @@
         }
     }
 }
+*/
 
 #pragma mark - Silent Push Notification Handler
 
@@ -189,9 +195,10 @@
     if ([UIApplication sharedApplication].applicationState == UIApplicationStateActive) {
         NSLog(@"ℹ️ App in foreground - scheduling download for later");
         // Schedule download for next background opportunity
-        if (@available(iOS 13.0, *)) {
-            [self scheduleAppRefreshTask];
-        }
+        // NOTE: BGTaskScheduler disabled - legacy Background Fetch will handle this
+        // if (@available(iOS 13.0, *)) {
+        //     [self scheduleAppRefreshTask];
+        // }
         [self endBackgroundTask];
         completion(UIBackgroundFetchResultNewData);
     } else {
@@ -308,15 +315,17 @@
 - (void)enableBackgroundUpdates:(BOOL)enabled {
     if (enabled) {
         [self setMinimumBackgroundFetchInterval:UIApplicationBackgroundFetchIntervalMinimum];
-        if (@available(iOS 13.0, *)) {
-            [self scheduleAppRefreshTask];
-        }
+        // NOTE: BGTaskScheduler disabled - legacy Background Fetch API is sufficient
+        // if (@available(iOS 13.0, *)) {
+        //     [self scheduleAppRefreshTask];
+        // }
         NSLog(@"✅ Background updates enabled");
     } else {
         [self setMinimumBackgroundFetchInterval:UIApplicationBackgroundFetchIntervalNever];
-        if (@available(iOS 13.0, *)) {
-            [[BGTaskScheduler sharedScheduler] cancelTaskRequestWithIdentifier:self.backgroundTaskIdentifier];
-        }
+        // NOTE: BGTaskScheduler disabled
+        // if (@available(iOS 13.0, *)) {
+        //     [[BGTaskScheduler sharedScheduler] cancelTaskRequestWithIdentifier:self.backgroundTaskIdentifier];
+        // }
         NSLog(@"⚠️ Background updates disabled");
     }
 }

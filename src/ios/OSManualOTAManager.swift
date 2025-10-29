@@ -515,43 +515,18 @@ import UIKit
         let skippedFiles = totalFiles - changedCount
         progressHandler?(0, changedCount, skippedFiles)
 
-        // Files we patch and should skip from download (keep our patched versions)
-        let patchedFiles = [
-            "/scripts/OutSystemsManifestLoader.js",
-            "/scripts/OutSystemsUI.Private.ApplicationLoadEvents.mvc.js"
-        ]
-
         // Prepare resource list in OutSystems format
         // Format: ["path?hash", "path2?hash2", ...]
-        // Skip patched files - we'll keep using our modified versions
         var resourceList = NSMutableArray()
-        var skippedPatchedFiles = 0
         for (path, hash) in manifest.urlVersions {
-            // Skip files that we've patched
-            var shouldSkip = false
-            for patchedFile in patchedFiles {
-                if path.contains(patchedFile) {
-                    shouldSkip = true
-                    skippedPatchedFiles += 1
-                    print("⏭️  Skipping patched file from download: \(path)")
-                    break
-                }
+            // Check if hash already starts with '?' to avoid double question marks
+            let resourcePath: String
+            if hash.hasPrefix("?") {
+                resourcePath = "\(path)\(hash)"
+            } else {
+                resourcePath = "\(path)?\(hash)"
             }
-
-            if !shouldSkip {
-                // Check if hash already starts with '?' to avoid double question marks
-                let resourcePath: String
-                if hash.hasPrefix("?") {
-                    resourcePath = "\(path)\(hash)"
-                } else {
-                    resourcePath = "\(path)?\(hash)"
-                }
-                resourceList.add(resourcePath)
-            }
-        }
-
-        if skippedPatchedFiles > 0 {
-            print("✅ Skipped \(skippedPatchedFiles) patched file(s) from download - keeping our modifications")
+            resourceList.add(resourcePath)
         }
 
         // Prepare URL mappings (if any)
@@ -825,6 +800,11 @@ import UIKit
     }
 
     // MARK: - Plugin Patch Management
+    // NOTE: Cache patching functions disabled - not needed for current implementation
+    // These functions attempted to patch files in the cache but caused issues
+    // The plugin now relies solely on the JavaScript hooks that patch files at runtime
+
+    /*
     private func deletePatchedFilesFromCache(version: String, manifest: OSModuleManifest) throws {
         guard let config = configuration else {
             throw OTAError.invalidConfiguration
@@ -1060,6 +1040,7 @@ import UIKit
             print("⚠️ No patches applied - files may already be patched or not found")
         }
     }
+    */
 
     // MARK: - Crash Detection
     private func setCrashDetectionFlag() {
