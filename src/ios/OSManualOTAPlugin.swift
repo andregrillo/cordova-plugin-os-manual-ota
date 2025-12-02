@@ -389,8 +389,8 @@ class OSManualOTAPlugin: CDVPlugin {
         let js = "localStorage.getItem('os_manual_ota_current_version')"
 
         webViewEngine.evaluateJavaScript(js) { [weak self] result, error in
-            if let err = error {
-                print("[OSManualOTA] Error reading version from localStorage: \(err.localizedDescription)")
+            if error != nil {
+                print("[OSManualOTA] Error reading version from localStorage: \(String(describing: error))")
                 return
             }
 
