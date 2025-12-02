@@ -23,6 +23,20 @@ var OSManualOTA = {
             return;
         }
 
+        // Try to get current version from OutSystems
+        var currentVersion = null;
+
+        // Try from OSManifestLoader.indexVersionToken (most reliable)
+        if (typeof OSManifestLoader !== 'undefined' && OSManifestLoader.indexVersionToken) {
+            currentVersion = OSManifestLoader.indexVersionToken;
+            console.log('[OSManualOTA] Got current version from indexVersionToken: ' + currentVersion);
+        }
+
+        // Pass current version to native if available
+        if (currentVersion) {
+            config.currentVersion = currentVersion;
+        }
+
         exec(successCallback, errorCallback, 'OSManualOTA', 'configure', [config]);
     },
 

@@ -87,13 +87,50 @@ import UIKit
     }
 
     // MARK: - Configuration
-    @objc public func configure(baseURL: String, hostname: String, applicationPath: String) {
+    @objc public func configure(baseURL: String, hostname: String, applicationPath: String, currentVersion: String? = nil) {
         self.configuration = OSUpdateConfiguration(
             baseURL: baseURL,
             hostname: hostname,
             applicationPath: applicationPath
         )
         saveConfiguration()
+
+        // If JavaScript provided current version, use it directly
+        if let version = currentVersion, !version.isEmpty {
+            print("[OSManualOTA] Setting current version from JavaScript: \(version)")
+            saveCurrentVersion(version)
+        } else {
+            // Otherwise try to initialize from OutSystems cache
+            initializeCurrentVersionIfNeeded()
+        }
+    }
+
+    private func initializeCurrentVersionIfNeeded() {
+        // Only initialize if we don't have a current version stored yet
+        let storedVersion = defaults.string(forKey: OSStorageKey.currentVersion)
+
+        if storedVersion == nil || storedVersion == "unknown" {
+            print("[OSManualOTA] Initializing current version from OutSystems cache...")
+            print("[OSManualOTA] Current stored version: \(storedVersion ?? "nil")")
+
+            // Get the running version from OutSystems cache
+            if let appCache = getOutSystemsCache() {
+                print("[OSManualOTA] ✅ Got OSApplicationCache")
+
+                if let runningFrame = appCache.getCurrentRunningFrame() {
+                    let version = runningFrame.versionToken
+                    print("[OSManualOTA] ✅ Found running version: \(version)")
+                    saveCurrentVersion(version)
+                } else {
+                    print("[OSManualOTA] ❌ getCurrentRunningFrame() returned nil")
+                }
+            } else {
+                print("[OSManualOTA] ❌ getOutSystemsCache() returned nil - cache not available yet")
+                print("[OSManualOTA] NOTE: Version will be initialized on first checkForUpdates() call")
+            }
+        } else {
+            print("[OSManualOTA] Current version already initialized: \(storedVersion ?? "unknown")")
+        }
     }
 
     private func loadConfiguration() {
@@ -123,21 +160,38 @@ import UIKit
             return
         }
 
+        // Try to initialize version if not set yet (fallback if configure was too early)
+        initializeCurrentVersionIfNeeded()
+
         currentStatus = .checking
 
         Task {
             do {
                 let latestVersion = try await getLatestVersion()
-                let currentVersion = getCurrentVersion()
+                var currentVersion = getCurrentVersion()
+
+                print("[OSManualOTA] 🔍 Version comparison:")
+                print("[OSManualOTA]    Current: '\(currentVersion)'")
+                print("[OSManualOTA]    Latest:  '\(latestVersion)'")
+                print("[OSManualOTA]    Match: \(latestVersion == currentVersion)")
+
+                // If still unknown, use the latest version as current (first time)
+                if currentVersion == "unknown" {
+                    print("[OSManualOTA] First time check - setting current version to: \(latestVersion)")
+                    saveCurrentVersion(latestVersion)
+                    currentVersion = latestVersion
+                }
 
                 // Update last check timestamp
                 defaults.set(Date(), forKey: OSStorageKey.lastUpdateCheck)
 
                 if latestVersion != currentVersion {
                     currentStatus = .available(version: latestVersion)
+                    print("[OSManualOTA] ✅ Update available!")
                     completion(true, latestVersion, nil)
                 } else {
                     currentStatus = .notAvailable
+                    print("[OSManualOTA] ✅ No update - versions match")
                     completion(false, currentVersion, nil)
                 }
             } catch {
@@ -662,7 +716,7 @@ import UIKit
         return defaults.string(forKey: OSStorageKey.currentVersion) ?? "unknown"
     }
 
-    private func saveCurrentVersion(_ version: String) {
+    internal func saveCurrentVersion(_ version: String) {
         defaults.set(version, forKey: OSStorageKey.currentVersion)
     }
 
@@ -1125,9 +1179,29 @@ import UIKit
     }
 
     private func getOutSystemsCache() -> OSApplicationCache? {
-        // Get reference to OutSystems cache if available
-        // This would require accessing the OutSystems plugin
-        return nil
+        guard let config = configuration else {
+            print("[OSManualOTA] Cannot get cache: configuration not set")
+            return nil
+        }
+
+        // Get the shared OSNativeCache instance
+        guard let cacheInstance = OSNativeCache.sharedInstance() as? OSNativeCache else {
+            print("[OSManualOTA] OSNativeCache not available")
+            return nil
+        }
+
+        // Set current application context
+        cacheInstance.setCurrentApplication(config.hostname, application: config.applicationPath)
+
+        // Get the application cache
+        let appKey = OSCacheHelper.cacheKey(forHostname: config.hostname, andApplication: config.applicationPath)
+        guard let applicationEntries = cacheInstance.applicationEntries(),
+              let appCache = applicationEntries.object(forKey: appKey) as? OSApplicationCache else {
+            print("[OSManualOTA] Application cache not found for key: \(appKey)")
+            return nil
+        }
+
+        return appCache
     }
 
     // MARK: - Debug/Reset Methods

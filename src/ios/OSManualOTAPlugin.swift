@@ -27,6 +27,11 @@ class OSManualOTAPlugin: CDVPlugin {
         // Configure OTA manager with app settings
         configureFromSettings()
 
+        // Try to read current version from localStorage (set by JavaScript hook)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.readVersionFromLocalStorage()
+        }
+
         // Listen for OTA blocking status changes
         NotificationCenter.default.addObserver(
             self,
@@ -52,7 +57,15 @@ class OSManualOTAPlugin: CDVPlugin {
             return
         }
 
-        otaManager.configure(baseURL: baseURL, hostname: hostname, applicationPath: applicationPath)
+        // Get optional current version from JavaScript
+        let currentVersion = config["currentVersion"] as? String
+
+        otaManager.configure(
+            baseURL: baseURL,
+            hostname: hostname,
+            applicationPath: applicationPath,
+            currentVersion: currentVersion
+        )
 
         let result = CDVPluginResult(status: .ok, messageAs: "Configuration saved")
         commandDelegate.send(result, callbackId: command.callbackId)
@@ -370,5 +383,24 @@ class OSManualOTAPlugin: CDVPlugin {
         // Notify JavaScript side via event
         let js = "cordova.fireDocumentEvent('OSManualOTA.blockingStatusChanged', {enabled: \(enabled)});"
         commandDelegate.evalJs(js)
+    }
+
+    private func readVersionFromLocalStorage() {
+        let js = "localStorage.getItem('os_manual_ota_current_version')"
+
+        webViewEngine.evaluateJavaScript(js) { [weak self] result, error in
+            if let err = error {
+                print("[OSManualOTA] Error reading version from localStorage: \(err.localizedDescription)")
+                return
+            }
+
+            if let version = result as? String, !version.isEmpty, version != "null" {
+                print("[OSManualOTA] 📱 Read version from localStorage: \(version)")
+                // Just save the version directly - configuration is already set from settings
+                self?.otaManager.saveCurrentVersion(version)
+            } else {
+                print("[OSManualOTA] No version found in localStorage yet")
+            }
+        }
     }
 }
