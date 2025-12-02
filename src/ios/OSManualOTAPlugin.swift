@@ -395,6 +395,13 @@ class OSManualOTAPlugin: CDVPlugin {
             }
 
             if let version = result as? String, !version.isEmpty, version != "null" {
+                // Validate that it looks like a version token (not a boolean or other value)
+                // OutSystems version tokens are typically base64-like strings
+                if version == "false" || version == "true" || version == "unknown" {
+                    print("[OSManualOTA] ⚠️ Invalid version in localStorage: '\(version)' - ignoring")
+                    return
+                }
+
                 print("[OSManualOTA] 📱 Read version from localStorage: \(version)")
                 // Just save the version directly - configuration is already set from settings
                 self?.otaManager.saveCurrentVersion(version)

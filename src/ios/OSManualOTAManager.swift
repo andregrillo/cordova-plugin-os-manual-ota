@@ -731,7 +731,16 @@ import UIKit
 
     // MARK: - Storage Helpers
     private func getCurrentVersion() -> String {
-        return defaults.string(forKey: OSStorageKey.currentVersion) ?? "unknown"
+        let storedVersion = defaults.string(forKey: OSStorageKey.currentVersion) ?? "unknown"
+
+        // Validate the stored version - reject invalid values
+        if storedVersion == "false" || storedVersion == "true" {
+            print("[OSManualOTA] ⚠️ Invalid version '\(storedVersion)' in UserDefaults - clearing it")
+            defaults.removeObject(forKey: OSStorageKey.currentVersion)
+            return "unknown"
+        }
+
+        return storedVersion
     }
 
     internal func saveCurrentVersion(_ version: String) {
