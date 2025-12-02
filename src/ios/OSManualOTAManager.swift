@@ -88,6 +88,12 @@ import UIKit
 
     // MARK: - Configuration
     @objc public func configure(baseURL: String, hostname: String, applicationPath: String, currentVersion: String? = nil) {
+        print("[OSManualOTA] 🔧 configure() called")
+        print("[OSManualOTA]    baseURL: \(baseURL)")
+        print("[OSManualOTA]    hostname: \(hostname)")
+        print("[OSManualOTA]    applicationPath: \(applicationPath)")
+        print("[OSManualOTA]    currentVersion from JS: \(currentVersion ?? "nil")")
+
         self.configuration = OSUpdateConfiguration(
             baseURL: baseURL,
             hostname: hostname,
@@ -97,12 +103,16 @@ import UIKit
 
         // If JavaScript provided current version, use it directly
         if let version = currentVersion, !version.isEmpty {
-            print("[OSManualOTA] Setting current version from JavaScript: \(version)")
+            print("[OSManualOTA] ✅ Setting current version from JavaScript: '\(version)'")
             saveCurrentVersion(version)
+            print("[OSManualOTA] 📝 Saved to UserDefaults, verifying: '\(getCurrentVersion())'")
         } else {
+            print("[OSManualOTA] ⚠️ No currentVersion from JavaScript, trying OutSystems cache...")
             // Otherwise try to initialize from OutSystems cache
             initializeCurrentVersionIfNeeded()
         }
+
+        print("[OSManualOTA] 🔧 configure() complete. Final currentVersion: '\(getCurrentVersion())'")
     }
 
     private func initializeCurrentVersionIfNeeded() {
@@ -177,13 +187,21 @@ import UIKit
 
                 // If still unknown, use the latest version as current (first time)
                 if currentVersion == "unknown" {
-                    print("[OSManualOTA] First time check - setting current version to: \(latestVersion)")
+                    print("[OSManualOTA] ⚠️ First time check - setting current version to: \(latestVersion)")
                     saveCurrentVersion(latestVersion)
                     currentVersion = latestVersion
+                    print("[OSManualOTA] 📝 After update - currentVersion is now: '\(currentVersion)'")
+                    print("[OSManualOTA] 📝 Saved to UserDefaults, verifying: '\(getCurrentVersion())'")
                 }
 
                 // Update last check timestamp
                 defaults.set(Date(), forKey: OSStorageKey.lastUpdateCheck)
+
+                print("[OSManualOTA] 🔍 Final comparison before return:")
+                print("[OSManualOTA]    latestVersion: '\(latestVersion)'")
+                print("[OSManualOTA]    currentVersion: '\(currentVersion)'")
+                print("[OSManualOTA]    Are they equal? \(latestVersion == currentVersion)")
+                print("[OSManualOTA]    Are they NOT equal? \(latestVersion != currentVersion)")
 
                 if latestVersion != currentVersion {
                     currentStatus = .available(version: latestVersion)
