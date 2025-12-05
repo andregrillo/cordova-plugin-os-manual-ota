@@ -22,3 +22,11 @@ yarn-error.log
 # Temporary files
 *.tmp
 *.temp
+
+# Session documentation (local investigation notes)
+SESSION_*.md
+
+# Internal documentation (debugging and architecture notes)
+CACHE_ARCHITECTURE.md
+FIX_SUMMARY_*.md
+NEXT_STEPS.md

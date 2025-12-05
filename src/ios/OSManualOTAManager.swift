@@ -74,6 +74,27 @@ import UIKit
 
                 try swapCacheToVersion(pendingVersion, manifest: manifest)
 
+                // 🔄 CRITICAL: Call switchToVersion to apply the update (like automatic OTA does)
+                print("🔄 Calling switchToVersion to apply update...")
+                if let cacheEngine = OSNativeCache.sharedInstance(),
+                   let config = configuration {
+                    // Call switchToVersion via Objective-C runtime
+                    // Define the method signature that matches: -(void) switchToVersion:(NSString*)hostname application:(NSString*)application version:(NSString*)version
+                    typealias SwitchToVersionFunc = @convention(c) (AnyObject, Selector, NSString, NSString, NSString) -> Void
+
+                    let selector = NSSelectorFromString("switchToVersion:application:version:")
+                    if let method = class_getInstanceMethod(object_getClass(cacheEngine), selector) {
+                        let implementation = method_getImplementation(method)
+                        let typedImplementation = unsafeBitCast(implementation, to: SwitchToVersionFunc.self)
+                        typedImplementation(cacheEngine as AnyObject, selector, config.hostname as NSString, config.applicationPath as NSString, pendingVersion as NSString)
+                        print("✅ switchToVersion called successfully")
+                    } else {
+                        print("⚠️  Could not find switchToVersion method")
+                    }
+                } else {
+                    print("⚠️  Could not get OSNativeCache sharedInstance or configuration for switchToVersion")
+                }
+
                 // Clear pending swap flags
                 defaults.removeObject(forKey: OSStorageKey.pendingSwapVersion)
                 defaults.removeObject(forKey: OSStorageKey.pendingSwapTimestamp)
@@ -94,10 +115,16 @@ import UIKit
         print("[OSManualOTA]    applicationPath: \(applicationPath)")
         print("[OSManualOTA]    currentVersion from JS: \(currentVersion ?? "nil")")
 
+        // 🔧 CRITICAL FIX: Strip leading slash from applicationPath to match OutSystems automatic OTA
+        // Automatic OTA uses "OTATest" but JavaScript might pass "/OTATest"
+        // Cache key = hash(hostname/applicationPath), so this must match exactly
+        let normalizedAppPath = applicationPath.hasPrefix("/") ? String(applicationPath.dropFirst()) : applicationPath
+        print("[OSManualOTA]    normalized applicationPath: \(normalizedAppPath)")
+
         self.configuration = OSUpdateConfiguration(
             baseURL: baseURL,
             hostname: hostname,
-            applicationPath: applicationPath
+            applicationPath: normalizedAppPath
         )
         saveConfiguration()
 
@@ -525,6 +552,7 @@ import UIKit
             return newHashes
         }
 
+        // Return only files where the hash has changed
         return newHashes.filter { key, value in
             oldHashes[key] != value
         }
@@ -587,18 +615,43 @@ import UIKit
         let skippedFiles = totalFiles - changedCount
         progressHandler?(0, changedCount, skippedFiles)
 
+        // Files we patch and should skip from download (keep our patched versions)
+        let patchedFiles = [
+            "/scripts/OutSystemsManifestLoader.js",
+            "/scripts/OutSystemsUI.Private.ApplicationLoadEvents.mvc.js"
+        ]
+
         // Prepare resource list in OutSystems format
         // Format: ["path?hash", "path2?hash2", ...]
+        // Skip patched files - we'll keep using our modified versions
         var resourceList = NSMutableArray()
+        var skippedPatchedFiles = 0
         for (path, hash) in manifest.urlVersions {
-            // Check if hash already starts with '?' to avoid double question marks
-            let resourcePath: String
-            if hash.hasPrefix("?") {
-                resourcePath = "\(path)\(hash)"
-            } else {
-                resourcePath = "\(path)?\(hash)"
+            // Skip files that we've patched
+            var shouldSkip = false
+            for patchedFile in patchedFiles {
+                if path.contains(patchedFile) {
+                    shouldSkip = true
+                    skippedPatchedFiles += 1
+                    print("⏭️  Skipping patched file from download: \(path)")
+                    break
+                }
             }
-            resourceList.add(resourcePath)
+
+            if !shouldSkip {
+                // Check if hash already starts with '?' to avoid double question marks
+                let resourcePath: String
+                if hash.hasPrefix("?") {
+                    resourcePath = "\(path)\(hash)"
+                } else {
+                    resourcePath = "\(path)?\(hash)"
+                }
+                resourceList.add(resourcePath)
+            }
+        }
+
+        if skippedPatchedFiles > 0 {
+            print("✅ Skipped \(skippedPatchedFiles) patched file(s) from download - keeping our modifications")
         }
 
         // Prepare URL mappings (if any)
@@ -859,8 +912,176 @@ import UIKit
         print("✅ Cache swap completed successfully")
 
         // CRITICAL: Write the manifest to disk to persist the swap
+        // swapCache() should already call writeCacheManifest, but we'll call it explicitly
+        // to ensure the new version is persisted to disk
+        // Note: Objective-C method is writeCacheManifest, but Swift bridges it as writeManifest
+
+        // Get the running version token BEFORE writing manifest
+        let runningFrameBeforeWrite = appCache.getCurrentRunningFrame()
+        let runningVersionBeforeWrite = runningFrameBeforeWrite?.versionToken ?? "nil"
+        print("📝 About to write manifest. Running version token: \(runningVersionBeforeWrite)")
+
         cacheInstance.writeManifest()
-        print("✅ Cache manifest written to disk")
+        print("✅ Cache manifest explicitly written to disk")
+
+        // 🔍 COMPREHENSIVE MANIFEST VERIFICATION
+        print("\n🔍 === MANIFEST VERIFICATION START ===")
+
+        // 1. Get the manifest file path
+        let paths = NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true)
+        if let appSupportDir = paths.first {
+            let manifestPath = (appSupportDir as NSString).appendingPathComponent("OSNativeCache/OSCacheManifest.plist")
+            print("📂 Manifest file path: \(manifestPath)")
+
+            let fileManager = FileManager.default
+
+            // 2. Check if file exists
+            if fileManager.fileExists(atPath: manifestPath) {
+                print("✅ Manifest file EXISTS")
+
+                // 3. Get file attributes
+                do {
+                    let attributes = try fileManager.attributesOfItem(atPath: manifestPath)
+                    let fileSize = attributes[.size] as? Int ?? 0
+                    let modDate = attributes[.modificationDate] as? Date ?? Date()
+                    let permissions = attributes[.posixPermissions] as? Int ?? 0
+
+                    print("   File size: \(fileSize) bytes")
+                    print("   Modified: \(modDate)")
+                    print("   Permissions: \(String(format: "%o", permissions))")
+                } catch {
+                    print("⚠️  Could not read file attributes: \(error)")
+                }
+
+                // 4. Read the manifest file back
+                if let manifestDict = NSDictionary(contentsOfFile: manifestPath) {
+                    print("✅ Successfully READ manifest file back")
+
+                    // Debug: Print top-level keys
+                    print("   Top-level keys in manifest: \(manifestDict.allKeys)")
+
+                    // Debug: Check what cachedApplication actually is
+                    if let cachedAppRaw = manifestDict["cachedApplication"] {
+                        print("   📋 cachedApplication: \(cachedAppRaw) (Type: \(type(of: cachedAppRaw)))")
+                    }
+
+                    // Debug: Check cachedEntries - this should contain the actual cache data
+                    if let cachedEntriesRaw = manifestDict["cachedEntries"] {
+                        print("   📋 cachedEntries exists!")
+                        print("   📋 Type: \(type(of: cachedEntriesRaw))")
+
+                        // Try to access it as a dictionary
+                        if let cachedEntries = cachedEntriesRaw as? NSDictionary {
+                            print("   📋 cachedEntries keys: \(cachedEntries.allKeys)")
+
+                            // Check if our app ID is in there
+                            if let appCacheId = manifestDict["cachedApplication"] as? String {
+                                if let appCache = cachedEntries[appCacheId] as? NSDictionary {
+                                    print("   ✅ Found cache data for app: \(appCacheId)")
+                                    print("   📋 App cache keys: \(appCache.allKeys)")
+
+                                    // Now look for version token (note: key is "cachedVersion" not "CacheVersion")
+                                    if let versionToken = appCache["cachedVersion"] as? String {
+                                        print("   📌 cachedVersion in file: \(versionToken)")
+
+                                        if versionToken == version {
+                                            print("   ✅ ✅ ✅ VERSION TOKEN MATCHES! (\(version))")
+                                        } else {
+                                            print("   ❌ ❌ ❌ VERSION TOKEN MISMATCH!")
+                                            print("      Expected: \(version)")
+                                            print("      Found: \(versionToken)")
+                                        }
+                                    } else {
+                                        print("   ❌ cachedVersion not found in app cache")
+                                        print("   Available keys: \(appCache.allKeys)")
+                                    }
+                                } else {
+                                    print("   ❌ App cache data not found for ID: \(appCacheId)")
+                                }
+                            }
+                        }
+                    } else {
+                        print("   ⚠️  cachedEntries not found")
+                    }
+
+                    // OLD CODE - keeping for reference but this was wrong assumption
+                    if false, let cachedApp = manifestDict["cachedApplication"] as? NSDictionary {
+                        print("   ✅ Found cachedApplication entry as NSDictionary")
+
+                        // Check the version token
+                        if let versionToken = cachedApp["CacheVersion"] as? String {
+                            print("   📌 CacheVersion in file: \(versionToken)")
+
+                            if versionToken == version {
+                                print("   ✅ VERSION TOKEN MATCHES! (\(version))")
+                            } else {
+                                print("   ❌ VERSION TOKEN MISMATCH!")
+                                print("      Expected: \(version)")
+                                print("      Found: \(versionToken)")
+                            }
+                        } else {
+                            print("   ❌ CacheVersion key not found in cachedApplication!")
+                            print("   cachedApplication keys: \(cachedApp.allKeys)")
+                        }
+
+                        // Check frames
+                        if let frames = cachedApp["Frames"] as? NSArray {
+                            print("   Cache frames in manifest: \(frames.count)")
+                            for (index, frame) in frames.enumerated() {
+                                if let frameDict = frame as? NSDictionary,
+                                   let frameVersion = frameDict["VersionToken"] as? String {
+                                    print("      Frame \(index): \(frameVersion)")
+                                }
+                            }
+                        } else {
+                            print("   ⚠️  No Frames array found")
+                        }
+
+                        // Check hostname and path
+                        if let hostname = cachedApp["Hostname"] as? String,
+                           let appPath = cachedApp["ApplicationPath"] as? String {
+                            print("   Application: \(hostname)\(appPath)")
+                        }
+                    } else {
+                        print("   ❌ cachedApplication key not found!")
+                    }
+                } else {
+                    print("❌ FAILED to read manifest file back!")
+                    print("   This suggests the file is corrupted or format is invalid")
+                }
+            } else {
+                print("❌ Manifest file DOES NOT EXIST at path!")
+                print("   This means writeManifest() did not create the file")
+
+                // List what files DO exist in the OSNativeCache directory
+                let cacheDir = (appSupportDir as NSString).appendingPathComponent("OSNativeCache")
+                print("\n📁 Checking what exists in OSNativeCache directory:")
+                print("   Directory path: \(cacheDir)")
+
+                if fileManager.fileExists(atPath: cacheDir) {
+                    print("   ✅ OSNativeCache directory EXISTS")
+
+                    do {
+                        let contents = try fileManager.contentsOfDirectory(atPath: cacheDir)
+                        print("   Files in directory (\(contents.count)):")
+                        for item in contents {
+                            let itemPath = (cacheDir as NSString).appendingPathComponent(item)
+                            let attrs = try? fileManager.attributesOfItem(atPath: itemPath)
+                            let size = attrs?[.size] as? Int ?? 0
+                            print("      - \(item) (\(size) bytes)")
+                        }
+                    } catch {
+                        print("   ⚠️  Could not list directory contents: \(error)")
+                    }
+                } else {
+                    print("   ❌ OSNativeCache directory DOES NOT EXIST!")
+                }
+            }
+        } else {
+            print("❌ Could not get Application Support directory")
+        }
+
+        print("🔍 === MANIFEST VERIFICATION END ===\n")
 
         // Verify the running version was actually updated
         if let newRunningFrame = appCache.getCurrentRunningFrame() {
