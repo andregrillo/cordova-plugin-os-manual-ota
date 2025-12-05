@@ -12,9 +12,9 @@ class OSManualOTAPlugin: CDVPlugin {
 
     // MARK: - Properties
     private let otaManager = OSManualOTAManager.shared
-    private var backgroundManager: OSBackgroundUpdateManager {
-        return OSBackgroundUpdateManager.shared
-    }
+    private lazy var backgroundManager: OSBackgroundUpdateManager = {
+        return OSBackgroundUpdateManager.shared()
+    }()
 
     // Store callback IDs for progress updates
     private var downloadCallbackId: String?
