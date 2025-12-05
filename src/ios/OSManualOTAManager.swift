@@ -7,6 +7,8 @@
 
 import Foundation
 import UIKit
+import WebKit
+import ObjectiveC
 
 @objc public class OSManualOTAManager: NSObject {
 
@@ -32,13 +34,8 @@ import UIKit
         loadConfiguration()
         checkForCrashOnLastUpdate()
 
-        // Register for app foreground notifications to check for pending swaps
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(appWillEnterForeground),
-            name: UIApplication.willEnterForegroundNotification,
-            object: nil
-        )
+        // Note: No need to check for pending swaps anymore
+        // Cache swaps happen immediately after download completes
     }
 
     /// Called when app enters foreground - checks for pending cache swaps
@@ -74,27 +71,6 @@ import UIKit
 
                 try swapCacheToVersion(pendingVersion, manifest: manifest)
 
-                // 🔄 CRITICAL: Call switchToVersion to apply the update (like automatic OTA does)
-                print("🔄 Calling switchToVersion to apply update...")
-                if let cacheEngine = OSNativeCache.sharedInstance(),
-                   let config = configuration {
-                    // Call switchToVersion via Objective-C runtime
-                    // Define the method signature that matches: -(void) switchToVersion:(NSString*)hostname application:(NSString*)application version:(NSString*)version
-                    typealias SwitchToVersionFunc = @convention(c) (AnyObject, Selector, NSString, NSString, NSString) -> Void
-
-                    let selector = NSSelectorFromString("switchToVersion:application:version:")
-                    if let method = class_getInstanceMethod(object_getClass(cacheEngine), selector) {
-                        let implementation = method_getImplementation(method)
-                        let typedImplementation = unsafeBitCast(implementation, to: SwitchToVersionFunc.self)
-                        typedImplementation(cacheEngine as AnyObject, selector, config.hostname as NSString, config.applicationPath as NSString, pendingVersion as NSString)
-                        print("✅ switchToVersion called successfully")
-                    } else {
-                        print("⚠️  Could not find switchToVersion method")
-                    }
-                } else {
-                    print("⚠️  Could not get OSNativeCache sharedInstance or configuration for switchToVersion")
-                }
-
                 // Clear pending swap flags
                 defaults.removeObject(forKey: OSStorageKey.pendingSwapVersion)
                 defaults.removeObject(forKey: OSStorageKey.pendingSwapTimestamp)
@@ -115,9 +91,8 @@ import UIKit
         print("[OSManualOTA]    applicationPath: \(applicationPath)")
         print("[OSManualOTA]    currentVersion from JS: \(currentVersion ?? "nil")")
 
-        // 🔧 CRITICAL FIX: Strip leading slash from applicationPath to match OutSystems automatic OTA
+        // Strip leading slash from applicationPath to match OutSystems automatic OTA
         // Automatic OTA uses "OTATest" but JavaScript might pass "/OTATest"
-        // Cache key = hash(hostname/applicationPath), so this must match exactly
         let normalizedAppPath = applicationPath.hasPrefix("/") ? String(applicationPath.dropFirst()) : applicationPath
         print("[OSManualOTA]    normalized applicationPath: \(normalizedAppPath)")
 
@@ -190,6 +165,57 @@ import UIKit
         defaults.set(config.applicationPath, forKey: "os_manual_ota_app_path")
     }
 
+    // MARK: - Version Debugging Helper
+    private func logAllVersionSources() {
+        print("[OSManualOTA] ========================================")
+        print("[OSManualOTA] 🔍 COMPREHENSIVE VERSION DEBUG")
+        print("[OSManualOTA] ========================================")
+
+        // 1. Plugin's stored version in UserDefaults
+        let pluginVersion = defaults.string(forKey: OSStorageKey.currentVersion) ?? "nil"
+        print("[OSManualOTA] 📱 Plugin (UserDefaults): '\(pluginVersion)'")
+
+        // 2. Plugin's getCurrentVersion() (with validation)
+        let validatedVersion = getCurrentVersion()
+        print("[OSManualOTA] 📱 Plugin (validated):    '\(validatedVersion)'")
+
+        // 3. OutSystems cache versions
+        if let appCache = getOutSystemsCache() {
+            print("[OSManualOTA] ✅ OutSystems Cache accessible")
+
+            // 3a. Running frame version token
+            if let runningFrame = appCache.getCurrentRunningFrame() {
+                let runningVersion = runningFrame.versionToken ?? "nil"
+                let runningStatus = runningFrame.status.rawValue
+                let runningPreBundle = runningFrame.preBundle
+                print("[OSManualOTA] 🏃 Running Frame versionToken: '\(runningVersion)'")
+                print("[OSManualOTA]    Running Frame status: \(runningStatus)")
+                print("[OSManualOTA]    Running Frame preBundle: \(runningPreBundle)")
+            } else {
+                print("[OSManualOTA] ⚠️  getCurrentRunningFrame() returned nil")
+            }
+
+            // 3b. Cache version (from getCurrentCacheVersion method)
+            let cacheVersion = appCache.getCurrentCacheVersion() ?? "nil"
+            print("[OSManualOTA] 💾 getCurrentCacheVersion(): '\(cacheVersion)'")
+
+            // 3c. Check prebundle frame if exists
+            if let preBundle = appCache.getPreBundleFrame() {
+                let preBundleVersion = preBundle.versionToken ?? "nil"
+                print("[OSManualOTA] 📦 PreBundle Frame version: '\(preBundleVersion)'")
+            } else {
+                print("[OSManualOTA] 📦 No prebundle frame")
+            }
+        } else {
+            print("[OSManualOTA] ❌ getOutSystemsCache() returned nil - cache not ready")
+        }
+
+        // 4. Check localStorage version (what JavaScript has)
+        print("[OSManualOTA] 📝 localStorage value: (will check from JavaScript)")
+
+        print("[OSManualOTA] ========================================")
+    }
+
     // MARK: - Check for Updates
     @objc public func checkForUpdates(completion: @escaping (Bool, String?, Error?) -> Void) {
         guard let config = configuration else {
@@ -204,8 +230,40 @@ import UIKit
 
         Task {
             do {
+                // DEBUG: Log all version sources BEFORE doing anything
+                print("[OSManualOTA] 🔍 Checking for updates...")
+                logAllVersionSources()
+
                 let latestVersion = try await getLatestVersion()
+                print("[OSManualOTA] 🌐 Server has version: '\(latestVersion)'")
+
                 var currentVersion = getCurrentVersion()
+
+                // IMPORTANT: Sync with actual running version from OutSystems cache
+                // This handles the case where OutSystems loaded a new OTA version
+                // but our plugin doesn't know about it yet
+                print("[OSManualOTA] 🔄 Attempting to sync with OutSystems running version...")
+                if let appCache = getOutSystemsCache() {
+                    print("[OSManualOTA] ✅ Got OutSystems cache")
+                    if let runningFrame = appCache.getCurrentRunningFrame() {
+                        let actualRunningVersion = runningFrame.versionToken
+                        print("[OSManualOTA] ✅ Got running frame with version: '\(actualRunningVersion)'")
+                        if actualRunningVersion != currentVersion {
+                            print("[OSManualOTA] 🔄 Detected version mismatch!")
+                            print("[OSManualOTA]    Stored: '\(currentVersion)'")
+                            print("[OSManualOTA]    Actually running: '\(actualRunningVersion)'")
+                            print("[OSManualOTA] ✅ Updating to actual running version")
+                            saveCurrentVersion(actualRunningVersion)
+                            currentVersion = actualRunningVersion
+                        } else {
+                            print("[OSManualOTA] ✅ Versions already match - no sync needed")
+                        }
+                    } else {
+                        print("[OSManualOTA] ⚠️ getCurrentRunningFrame() returned nil")
+                    }
+                } else {
+                    print("[OSManualOTA] ⚠️ getOutSystemsCache() returned nil - cache not ready")
+                }
 
                 print("[OSManualOTA] 🔍 Version comparison:")
                 print("[OSManualOTA]    Current: '\(currentVersion)'")
@@ -720,15 +778,49 @@ import UIKit
                     do {
                         try self.registerCacheFrame(cacheResources, version: version)
 
-                        // Mark that an update is ready to be applied
-                        // Don't swap cache here if we're in background - file writes will fail!
-                        self.defaults.set(version, forKey: OSStorageKey.pendingSwapVersion)
-                        self.defaults.set(Date().timeIntervalSince1970, forKey: OSStorageKey.pendingSwapTimestamp)
-                        print("✅ Update downloaded and registered - marked for swap on foreground")
+                        // Swap cache IMMEDIATELY - don't defer!
+                        // This ensures updates are ready instantly when user opens app
+                        print("🔄 Swapping cache immediately after download...")
+                        try self.swapCacheToVersion(version, manifest: manifest)
+
+                        // Update our stored current version
+                        self.saveCurrentVersion(version)
+
+                        print("✅ Cache swap completed! App will use new version on next launch.")
+
+                        // 🔧 UPDATE: Store new version in localStorage for JavaScript to use
+                        print("🔧 Updating localStorage with new version token...")
+                        self.updateVersionInLocalStorage(newVersion: version)
+
+                        // 🔧 CRITICAL: Patch the cached OutSystemsManifestLoader.js to add our override logic
+                        print("🔧 Patching cached OutSystemsManifestLoader.js...")
+                        self.patchCachedManifestLoader()
+
+                        // 🔄 CRITICAL: Call switchToVersion to apply the update NOW (like automatic OTA does)
+                        // This is what makes the automatic OTA work - it switches to the new version immediately
+                        print("🔄 Calling switchToVersion to apply update immediately...")
+                        if let cacheEngine = OSNativeCache.sharedInstance(),
+                           let config = self.configuration {
+                            // Call switchToVersion via Objective-C runtime
+                            // Define the method signature that matches: -(void) switchToVersion:(NSString*)hostname application:(NSString*)application version:(NSString*)version
+                            typealias SwitchToVersionFunc = @convention(c) (AnyObject, Selector, NSString, NSString, NSString) -> Void
+
+                            let selector = NSSelectorFromString("switchToVersion:application:version:")
+                            if let method = class_getInstanceMethod(object_getClass(cacheEngine), selector) {
+                                let implementation = method_getImplementation(method)
+                                let typedImplementation = unsafeBitCast(implementation, to: SwitchToVersionFunc.self)
+                                typedImplementation(cacheEngine as AnyObject, selector, config.hostname as NSString, config.applicationPath as NSString, version as NSString)
+                                print("✅ switchToVersion called successfully")
+                            } else {
+                                print("⚠️  Could not find switchToVersion method")
+                            }
+                        } else {
+                            print("⚠️  Could not get OSNativeCache sharedInstance or configuration for switchToVersion")
+                        }
 
                         continuation.resume(returning: true)
                     } catch {
-                        print("❌ Failed to register cache frame: \(error.localizedDescription)")
+                        print("❌ Failed to register or swap cache: \(error.localizedDescription)")
                         continuation.resume(throwing: error)
                     }
                 }
@@ -911,6 +1003,51 @@ import UIKit
 
         print("✅ Cache swap completed successfully")
 
+        // 🔧 CRITICAL FIX: Update urlMappings in application cache to point to new version
+        // swapCache() deliberately skips resourceMapping entries (urlMappings)
+        // We need to manually update these entries in appCache._cacheEntries
+        print("🔧 Updating urlMappings in application cache for new version...")
+
+        var mappingsUpdated = 0
+
+        // Process urlMappings (with cache)
+        if let urlMappings = manifest.urlMappings {
+            for (mappingKey, resourceUrl) in urlMappings {
+                // Get the versioned URL from urlVersions
+                if let resourceVersion = manifest.urlVersions[resourceUrl] {
+                    let versionedUrl = "\(resourceUrl)\(resourceVersion)"
+
+                    // Create or update cache entry for this mapping
+                    let selector = NSSelectorFromString("addCacheEntryForURL:withResourceMapping:")
+                    if appCache.responds(to: selector) {
+                        _ = appCache.perform(selector, with: mappingKey, with: versionedUrl)
+                        mappingsUpdated += 1
+                        print("   ✅ Updated mapping: \(mappingKey) -> \(versionedUrl)")
+                    }
+                }
+            }
+        }
+
+        // Process urlMappingsNoCache
+        if let urlMappingsNoCache = manifest.urlMappingsNoCache {
+            for (mappingKey, resourceUrl) in urlMappingsNoCache {
+                // Get the versioned URL from urlVersions
+                if let resourceVersion = manifest.urlVersions[resourceUrl] {
+                    let versionedUrl = "\(resourceUrl)\(resourceVersion)"
+
+                    // Create or update cache entry for this mapping
+                    let selector = NSSelectorFromString("addCacheEntryForURL:withResourceMapping:")
+                    if appCache.responds(to: selector) {
+                        _ = appCache.perform(selector, with: mappingKey, with: versionedUrl)
+                        mappingsUpdated += 1
+                        print("   ✅ Updated no-cache mapping: \(mappingKey) -> \(versionedUrl)")
+                    }
+                }
+            }
+        }
+
+        print("✅ urlMappings rebuilt for new version \(version) (\(mappingsUpdated) mappings updated)")
+
         // CRITICAL: Write the manifest to disk to persist the swap
         // swapCache() should already call writeCacheManifest, but we'll call it explicitly
         // to ensure the new version is persisted to disk
@@ -1045,6 +1182,11 @@ import UIKit
                     } else {
                         print("   ❌ cachedApplication key not found!")
                     }
+
+                    // Also check nativeCacheVersion for reference
+                    if let cacheVersion = manifestDict["nativeCacheVersion"] as? String {
+                        print("   Native cache version: \(cacheVersion)")
+                    }
                 } else {
                     print("❌ FAILED to read manifest file back!")
                     print("   This suggests the file is corrupted or format is invalid")
@@ -1106,7 +1248,7 @@ import UIKit
     // These functions attempted to patch files in the cache but caused issues
     // The plugin now relies solely on the JavaScript hooks that patch files at runtime
 
-    /*
+    // MARK: - File Patching (Re-enabled for manual OTA)
     private func deletePatchedFilesFromCache(version: String, manifest: OSModuleManifest) throws {
         guard let config = configuration else {
             throw OTAError.invalidConfiguration
@@ -1143,90 +1285,42 @@ import UIKit
             "/scripts/OutSystemsUI.Private.ApplicationLoadEvents.mvc.js"
         ]
 
-        // Find the NEW hashes (server's expected hashes) for these files in the manifest
-        var newHashesToDelete: [String] = []
-        for (path, hash) in manifest.urlVersions {
-            for patchedPath in patchedFilePaths {
-                if path.contains(patchedPath) {
-                    // Extract just the hash part (remove the '?' prefix if present)
-                    let cleanHash = hash.hasPrefix("?") ? String(hash.dropFirst()) : hash
-                    newHashesToDelete.append(cleanHash)
-                    print("🎯 Will delete NEW hash for: \(path) (hash: \(cleanHash))")
-                }
-            }
-        }
-
-        // Also get OLD hashes from saved asset hashes (previous version's hashes)
-        var oldHashesToDelete: [String] = []
-        if let savedHashesData = defaults.data(forKey: OSStorageKey.assetHashes),
-           let oldHashes = try? JSONDecoder().decode([String: String].self, from: savedHashesData) {
-            for (path, hash) in oldHashes {
-                for patchedPath in patchedFilePaths {
-                    if path.contains(patchedPath) {
-                        let cleanHash = hash.hasPrefix("?") ? String(hash.dropFirst()) : hash
-                        oldHashesToDelete.append(cleanHash)
-                        print("🎯 Will delete OLD hash for: \(path) (hash: \(cleanHash))")
-                    }
-                }
-            }
-        }
-
-        let allHashesToDelete = newHashesToDelete + oldHashesToDelete
-
-        guard !allHashesToDelete.isEmpty else {
-            print("⚠️ No patched files found in manifest")
-            return
-        }
-
+        // Scan ALL files in cache by content to find patched files
+        // We can't rely on hash matching because patched files have different hashes
         do {
             let files = try fileManager.contentsOfDirectory(atPath: cacheDir.path)
             print("📁 Found \(files.count) files in cache directory")
             var deletedCount = 0
 
-            // Also look for files by checking their content (since cache names might not match manifest hashes)
-            // This happens when files were previously cached with old hashes
-            var jsFilesChecked = 0
+            // Scan every file and check content
             for fileName in files {
                 let filePath = cacheDir.appendingPathComponent(fileName)
 
-                // First, try exact hash match (check both old and new hashes)
-                var shouldDelete = false
-                var deleteReason = ""
-                for hash in allHashesToDelete {
-                    if fileName == hash || fileName.contains(hash) {
-                        shouldDelete = true
-                        deleteReason = "hash match"
-                        print("🎯 Matched by hash: \(fileName)")
-                        break
-                    }
+                // Only check text files (JS/CSS)
+                guard let content = try? String(contentsOf: filePath, encoding: .utf8) else {
+                    continue
                 }
 
-                // If no hash match, check file content for identifying strings
-                if !shouldDelete, let content = try? String(contentsOf: filePath, encoding: .utf8) {
-                    jsFilesChecked += 1
+                var shouldDelete = false
+                var deleteReason = ""
 
-                    // Check if this is OutSystemsManifestLoader.js
-                    if content.contains("OutSystemsManifestLoader") && content.contains("checkForUpdates") {
-                        shouldDelete = true
-                        deleteReason = "ManifestLoader content"
-                        print("🎯 Matched by content: OutSystemsManifestLoader.js in file \(fileName)")
-
-                        // Show first 200 chars to verify it's the right file
-                        let preview = String(content.prefix(200))
-                        print("   Preview: \(preview)...")
-                    }
-                    // Check if this is ApplicationLoadEvents
-                    else if content.contains("ApplicationLoadEvents") && content.contains("MinimumDisplayTimeMs") {
-                        shouldDelete = true
-                        deleteReason = "ApplicationLoadEvents content"
-                        print("🎯 Matched by content: ApplicationLoadEvents in file \(fileName)")
-                    }
+                // Check if this is OutSystemsManifestLoader.js
+                if content.contains("OutSystemsManifestLoader") && content.contains("function(e){") {
+                    shouldDelete = true
+                    deleteReason = "OutSystemsManifestLoader.js content"
+                    print("🎯 Found OutSystemsManifestLoader.js in file \(fileName)")
+                }
+                // Check if this is ApplicationLoadEvents
+                else if content.contains("ApplicationLoadEvents") && content.contains("MinimumDisplayTimeMs") {
+                    shouldDelete = true
+                    deleteReason = "ApplicationLoadEvents content"
+                    print("🎯 Found ApplicationLoadEvents in file \(fileName)")
                 }
 
                 if shouldDelete {
                     do {
                         try fileManager.removeItem(at: filePath)
-                        print("🗑️  Deleted cached file: \(fileName) (reason: \(deleteReason))")
+                        print("🗑️  Deleted: \(fileName) (\(deleteReason))")
                         deletedCount += 1
                     } catch {
                         print("⚠️ Failed to delete \(fileName): \(error.localizedDescription)")
@@ -1234,7 +1328,7 @@ import UIKit
                 }
             }
 
-            print("✅ Deleted \(deletedCount) cached file(s), checked \(jsFilesChecked) JS files (target: old+new hashes)")
+            print("✅ Deleted \(deletedCount) cached file(s) from cache")
 
             // ALSO delete from www directory (prebundle) if files exist there
             // This is where OutSystems loads files from if they're not in cache yet
@@ -1274,7 +1368,7 @@ import UIKit
             throw OTAError.invalidConfiguration
         }
 
-        print("🔧 Re-applying plugin patches after OTA download...")
+        print("🔧 Re-applying plugin patches to downloaded files...")
 
         // Get the cache directory where files were downloaded
         let fileManager = FileManager.default
@@ -1287,8 +1381,37 @@ import UIKit
             .appendingPathComponent("OSNativeCache")
             .appendingPathComponent(cacheKey)
 
-        // Files to patch with their modifications
+        print("📂 Cache directory: \(cacheDir.path)")
+
+        // Define the patches to apply
         let patchesToApply: [(file: String, searchFor: String, replaceWith: String)] = [
+            (
+                file: "OutSystemsManifestLoader.js",
+                searchFor: "var OSManifestLoader=function(e){",
+                replaceWith: """
+                // [OSManualOTA Plugin Patch] Offline moduleinfo fallback - MUST BE FIRST!
+                (function() {
+                    var originalFetch = window.fetch;
+                    window.fetch = function(url, options) {
+                        return originalFetch.apply(this, arguments).catch(function(error) {
+                            // If fetch fails and it's for moduleversioninfo, try loading from cache
+                            if (url && url.indexOf('moduleversioninfo') > -1) {
+                                console.log('[OSManualOTA] 🔄 moduleversioninfo failed, checking localStorage...');
+                                var cachedVersion = localStorage.getItem('os_manual_ota_current_version');
+                                if (cachedVersion) {
+                                    console.log('[OSManualOTA] ✅ Found cached version, loading moduleinfo: ' + cachedVersion);
+                                    // Redirect to cached moduleinfo
+                                    var baseUrl = url.substring(0, url.indexOf('moduleversioninfo'));
+                                    return originalFetch(baseUrl + 'moduleinfo?' + cachedVersion);
+                                }
+                            }
+                            throw error;
+                        });
+                    };
+                })();
+                var OSManifestLoader=function(e){
+                """
+            ),
             (
                 file: "OutSystemsManifestLoader.js",
                 searchFor: "function checkForUpdates(",
@@ -1312,11 +1435,13 @@ import UIKit
         ]
 
         var patchedCount = 0
-        for patch in patchesToApply {
-            // Find the file in cache (it's stored as a hash)
-            let files = try fileManager.contentsOfDirectory(atPath: cacheDir.path)
+        let allFiles = try fileManager.contentsOfDirectory(atPath: cacheDir.path)
+        print("📊 Scanning \(allFiles.count) files in cache...")
 
-            for fileName in files {
+        for patch in patchesToApply {
+            var foundAndPatched = false
+
+            for fileName in allFiles {
                 let filePath = cacheDir.appendingPathComponent(fileName)
 
                 guard let content = try? String(contentsOf: filePath, encoding: .utf8) else {
@@ -1324,25 +1449,37 @@ import UIKit
                 }
 
                 // Check if this is the file we're looking for
-                if content.contains(patch.file) || fileName.contains(patch.file) {
-                    // Apply the patch
-                    if content.contains(patch.searchFor) && !content.contains(patch.replaceWith) {
+                if content.contains(patch.file) {
+                    print("🔍 Found \(patch.file) as \(fileName)")
+
+                    // Check if already patched
+                    if content.contains(patch.replaceWith) {
+                        print("   ✓ Already patched, skipping")
+                        foundAndPatched = true
+                        break
+                    }
+
+                    // Check if we can patch it
+                    if content.contains(patch.searchFor) {
                         let patchedContent = content.replacingOccurrences(of: patch.searchFor, with: patch.replaceWith)
                         try patchedContent.write(to: filePath, atomically: true, encoding: .utf8)
-                        print("✅ Re-patched: \(patch.file)")
+                        print("   ✅ Patched successfully!")
                         patchedCount += 1
+                        foundAndPatched = true
+                        break
+                    } else {
+                        print("   ⚠️  Search string not found, cannot patch")
                     }
                 }
             }
+
+            if !foundAndPatched {
+                print("⚠️  Could not find or patch: \(patch.file)")
+            }
         }
 
-        if patchedCount > 0 {
-            print("✅ Successfully re-applied \(patchedCount) plugin patch(es)")
-        } else {
-            print("⚠️ No patches applied - files may already be patched or not found")
-        }
+        print("📊 Patching complete: \(patchedCount) file(s) patched")
     }
-    */
 
     // MARK: - Crash Detection
     private func setCrashDetectionFlag() {
@@ -1466,6 +1603,174 @@ import UIKit
         defaults.removeObject(forKey: OSStorageKey.pendingSwapVersion)
         defaults.removeObject(forKey: OSStorageKey.pendingSwapTimestamp)
         print("✅ OTA state reset complete")
+    }
+
+    // MARK: - Version Token Management
+
+    /// Updates the version token in localStorage so JavaScript can use it
+    /// This is read by our patched OutSystemsManifestLoader.js to set the correct version on app start
+    /// - Parameter newVersion: The new version token to store
+    private func updateVersionInLocalStorage(newVersion: String) {
+        // Store in UserDefaults so it persists
+        defaults.set(newVersion, forKey: "os_manual_ota_current_version")
+        print("✅ Stored version token in UserDefaults: \(newVersion)")
+
+        // Also try to update localStorage through webview if available
+        if let webView = getWebView() {
+            let jsCode = """
+            localStorage.setItem('os_manual_ota_current_version', '\(newVersion)');
+            console.log('[OSManualOTA] Native updated localStorage with version: \(newVersion)');
+            """
+            webView.evaluateJavaScript(jsCode) { result, error in
+                if let error = error {
+                    print("⚠️  Could not update localStorage: \(error.localizedDescription)")
+                } else {
+                    print("✅ Updated localStorage with new version token")
+                }
+            }
+        } else {
+            print("⚠️  WebView not available - version will be synced on next app start")
+        }
+    }
+
+    /// Gets the WKWebView instance from the Cordova app
+    private func getWebView() -> WKWebView? {
+        guard let appDelegate = UIApplication.shared.delegate,
+              let window = appDelegate.window as? UIWindow,
+              let rootViewController = window.rootViewController else {
+            return nil
+        }
+
+        // Try to find WKWebView in the view hierarchy
+        return findWebView(in: rootViewController.view)
+    }
+
+    private func findWebView(in view: UIView) -> WKWebView? {
+        if let webView = view as? WKWebView {
+            return webView
+        }
+
+        for subview in view.subviews {
+            if let webView = findWebView(in: subview) {
+                return webView
+            }
+        }
+
+        return nil
+    }
+
+    /// Patches all cached OutSystemsManifestLoader.js files to add the version override logic
+    private func patchCachedManifestLoader() {
+        guard let appSupportDir = NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true).first else {
+            print("❌ Could not find Application Support directory")
+            return
+        }
+
+        let cacheDir = (appSupportDir as NSString).appendingPathComponent("OSNativeCache")
+        let fileManager = FileManager.default
+
+        print("📂 Searching for OutSystemsManifestLoader.js in cache...")
+
+        do {
+            let cacheDirs = try fileManager.contentsOfDirectory(atPath: cacheDir)
+            var patchedCount = 0
+
+            for dir in cacheDirs where dir != "OSCacheManifest.plist" {
+                let appCacheDir = (cacheDir as NSString).appendingPathComponent(dir)
+
+                var isDirectory: ObjCBool = false
+                guard fileManager.fileExists(atPath: appCacheDir, isDirectory: &isDirectory), isDirectory.boolValue else {
+                    continue
+                }
+
+                let files = try fileManager.contentsOfDirectory(atPath: appCacheDir)
+
+                for file in files {
+                    let filePath = (appCacheDir as NSString).appendingPathComponent(file)
+
+                    guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else {
+                        continue
+                    }
+
+                    // Check if this is OutSystemsManifestLoader.js
+                    if content.contains("OSManifestLoader") && content.contains("indexVersionToken") {
+                        // Check if already patched by our code
+                        if content.contains("OSManualOTA: Intercept indexVersionToken") {
+                            print("   ⏭️  Already patched: \(dir)/\(file)")
+                            continue
+                        }
+
+                        print("🎯 Found unpatched OutSystemsManifestLoader.js at: \(dir)/\(file)")
+
+                        // Add our override code - intercepts the token SETTER
+                        let patchCode = """
+
+// 🔧 OSManualOTA: Intercept indexVersionToken setter to use stored value
+(function() {
+    if (typeof OSManifestLoader !== 'undefined') {
+        var originalIndexVersionToken = null;
+
+        // Override the indexVersionToken property with getter/setter
+        Object.defineProperty(OSManifestLoader, 'indexVersionToken', {
+            get: function() {
+                return originalIndexVersionToken;
+            },
+            set: function(value) {
+                // When index.html tries to set the OLD token, replace it with NEW token from storage
+                var storedVersion = localStorage.getItem('os_manual_ota_current_version');
+                if (storedVersion && storedVersion !== 'unknown' && storedVersion !== value) {
+                    console.log('[OSManualOTA] ✅ Intercepted token setter: ' + value + ' -> ' + storedVersion);
+                    originalIndexVersionToken = storedVersion;
+                } else {
+                    originalIndexVersionToken = value;
+                    // First time or no override - store what index.html is setting
+                    if (value && (!storedVersion || storedVersion === 'unknown')) {
+                        localStorage.setItem('os_manual_ota_current_version', value);
+                        console.log('[OSManualOTA] Stored initial version: ' + value);
+                    }
+                }
+            },
+            configurable: true,
+            enumerable: true
+        });
+    }
+})();
+"""
+
+                        // Try multiple insertion points
+                        var patchedContent: String?
+
+                        // 1. Try after our blocking hook (for www/ version)
+                        if let range = content.range(of: "console.log('[OSManualOTA] Blocking hook installed');") {
+                            patchedContent = content
+                            patchedContent!.insert(contentsOf: patchCode, at: range.upperBound)
+                            print("   ✅ Patched after blocking hook (www/ version)")
+                        }
+                        // 2. Try at end of file (for original OutSystems version from server)
+                        else if content.contains("e.indexVersionToken=null") || content.contains("OSManifestLoader") {
+                            patchedContent = content + patchCode
+                            print("   ✅ Patched at end of file (server version)")
+                        }
+
+                        if let finalContent = patchedContent {
+                            try finalContent.write(toFile: filePath, atomically: true, encoding: .utf8)
+                            patchedCount += 1
+                        } else {
+                            print("   ⚠️  Could not find insertion point in file")
+                        }
+                    }
+                }
+            }
+
+            if patchedCount == 0 {
+                print("⚠️  No OutSystemsManifestLoader.js files found to patch")
+            } else {
+                print("✅ Successfully patched \(patchedCount) OutSystemsManifestLoader.js file(s)")
+            }
+
+        } catch {
+            print("❌ Error while patching OutSystemsManifestLoader.js: \(error.localizedDescription)")
+        }
     }
 }
 

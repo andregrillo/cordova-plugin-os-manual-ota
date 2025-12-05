@@ -81,6 +81,21 @@ function patchManifestLoader(context, platform) {
     if (OriginalOSManifestLoader.indexVersionToken) {
         localStorage.setItem('os_manual_ota_current_version', OriginalOSManifestLoader.indexVersionToken);
         console.log('[OSManualOTA] Stored current version in localStorage: ' + OriginalOSManifestLoader.indexVersionToken);
+
+        // AUTO-SYNC: Notify native plugin of the actual running version
+        // This ensures the plugin always knows the real version, even after OTA updates
+        document.addEventListener('deviceready', function() {
+            if (window.cordova && window.cordova.exec) {
+                console.log('[OSManualOTA] 🔄 Auto-syncing version with native plugin: ' + OriginalOSManifestLoader.indexVersionToken);
+                window.cordova.exec(
+                    function() { console.log('[OSManualOTA] ✅ Version auto-synced successfully'); },
+                    function(err) { console.log('[OSManualOTA] ⚠️ Version auto-sync failed:', err); },
+                    'OSManualOTA',
+                    'syncVersionFromJS',
+                    [OriginalOSManifestLoader.indexVersionToken]
+                );
+            }
+        }, false);
     }
 
     // Helper to check if blocking is enabled
