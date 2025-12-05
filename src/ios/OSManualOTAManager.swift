@@ -783,7 +783,7 @@ import UIKit
     private var currentCacheResources: OSCacheResources?
 
     // MARK: - Storage Helpers
-    private func getCurrentVersion() -> String {
+    internal func getCurrentVersion() -> String {
         let storedVersion = defaults.string(forKey: OSStorageKey.currentVersion) ?? "unknown"
 
         // Validate the stored version - reject invalid values
@@ -1426,7 +1426,7 @@ import UIKit
         return defaults.string(forKey: "os_manual_ota_app_path")
     }
 
-    private func getOutSystemsCache() -> OSApplicationCache? {
+    internal func getOutSystemsCache() -> OSApplicationCache? {
         guard let config = configuration else {
             print("[OSManualOTA] Cannot get cache: configuration not set")
             return nil
