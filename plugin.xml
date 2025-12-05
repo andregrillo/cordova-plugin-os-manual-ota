@@ -37,9 +37,16 @@
             </array>
         </config-file>
 
-        <!-- Minimum background fetch interval -->
+        <!-- Minimum background fetch interval (iOS 7-12) -->
         <config-file target="*-Info.plist" parent="UIApplicationBackgroundFetchInterval">
             <real>3600</real> <!-- 1 hour, can be customized -->
+        </config-file>
+
+        <!-- BGTaskScheduler identifiers (iOS 13+) -->
+        <config-file target="*-Info.plist" parent="BGTaskSchedulerPermittedIdentifiers">
+            <array>
+                <string>com.outsystems.manual-ota.refresh</string>
+            </array>
         </config-file>
 
         <!-- Plugin source files -->
